@@ -13,7 +13,7 @@
                 display: block;
             }
 
-            /* Main HUD Bar (Health, Energy, XP) - Unchanged */
+            /* Main HUD Bar (Health, Energy, XP) */
             #mainHud {
                 position: fixed;
                 top: 10px;
@@ -95,7 +95,7 @@
                 transition: transform 0.1s ease-out;
             }
             
-            /* NPC HP Bar - Unchanged */
+            /* NPC HP Bar */
             #npcHpBar {
                 position: fixed;
                 top: 10px;
@@ -113,7 +113,7 @@
                 background: #f33;
             }
 
-            /* Ability Bar - Unchanged */
+            /* Ability Bar */
             #abilityBar {
                 position: fixed;
                 bottom: 10px;
@@ -174,7 +174,7 @@
                 border-radius: 4px;
             }
             
-            /* Stats Menu Overlay - Unchanged */
+            /* Stats Menu Overlay */
             #statsMenu {
                 position: fixed;
                 top: 50%;
@@ -243,7 +243,7 @@
         </div>
 
         <div id="abilityBar">
-            <div id="abilityTitle">Universal: <span id="uniAbilityName">Punch</span> (LMB)</div>
+            <div id="abilityTitle">Universal: <span id="uniAbilityName">Punch</span> (LMB) </div>
             <div class="abilitySlot" id="slot1">
                 <div class="cooldownOverlay" id="cool1"></div>
                 <div class="abilityKey">1</div>
@@ -262,7 +262,7 @@
             <div class="abilitySlot" id="slot4">
                 <div class="cooldownOverlay" id="cool4"></div>
                 <div class="abilityKey">4</div>
-                <div class="abilityName" id="name4">Punch</div>
+                <div class="abilityName" id="name4">Punch</div> 
             </div>
         </div>
         
@@ -324,6 +324,9 @@
                 unspentStatPoints: 0, 
                 invincible: false,
                 berserkMode: false,
+                isBlocking: false,
+                isDashing: false,
+                hasDashHit: false,
                 stats: {
                     speed: 4,
                     strength: 10,
@@ -375,8 +378,8 @@
             document.getElementById("name1").innerText = b.abilityNames[0];
             document.getElementById("name2").innerText = b.abilityNames[1];
             document.getElementById("name3").innerText = b.abilityNames[2];
-            document.getElementById("name4").innerText = b.abilityNames[3];
-            document.getElementById("abilityTitle").innerText = `${savedBuild} Build Active`;
+            document.getElementById("name4").innerText = "Dash/Punch"; // Explicitly set universal ability name
+            document.getElementById("abilityTitle").innerHTML = `${savedBuild} Build Active / **DASH (Q)** / **BLOCK (F)**`; // Updated title
 
             // ===== NPC ===== (Giving XP upon defeat)
             const npc = {
@@ -405,11 +408,24 @@
                     document.getElementById('statsMenu').style.display = menuOpen ? 'block' : 'none';
                     if (menuOpen) updateStatsMenu(); 
                 }
+                if (e.key.toLowerCase() === 'q') { // Q for Dash
+                    dashMove(); 
+                }
+                 // NEW: F to Block
+                if (e.key.toLowerCase() === 'f' && player.stamina > 0) {
+                    player.isBlocking = true;
+                }
             });
+            document.addEventListener("keyup", (e) => {
+                 if (e.key.toLowerCase() === 'f') { // Stop Blocking
+                    player.isBlocking = false;
+                 }
+            });
+
 
             const damageNumbers = [];
             const particles = [];
-            const afterimages = []; // NEW: Afterimages array
+            const afterimages = []; 
             let camX = 0;
             let abilityCooldowns = [0, 0, 0, 0];
             let screenShakeTime = 0;
@@ -420,7 +436,7 @@
                 shakeIntensity = intensity;
             }
 
-            // ===== NEW: XP & LEVEL UP LOGIC (Unchanged) =====
+            // ===== XP & LEVEL UP LOGIC (LEVEL UP GRANTS STAT POINTS) =====
             function gainXP(amount) {
                 if (!player.alive) return;
                 player.xp += amount;
@@ -435,7 +451,7 @@
                 player.xp -= player.xpToNextLevel;
                 player.level++;
                 player.xpToNextLevel = getXPForLevel(player.level);
-                player.unspentStatPoints += 3;
+                player.unspentStatPoints += 3; // GRANTS 3 POINTS PER LEVEL UP
 
                 // Full heal upon level up
                 player.hp = player.maxHp;
@@ -445,11 +461,9 @@
                 triggerScreenShake(20, 10);
                 burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#f0f", 50, 15);
                 createDamageNumber("LEVEL UP!", player.x + player.w / 2, player.y - 40, "#f0f");
-
-                if (player.level === 3) console.log("Ability Upgrade Unlocked!");
             }
 
-            // NEW: Stat Distribution Logic (Unchanged)
+            // STAT DISTRIBUTION LOGIC
             function distributeStat(stat) {
                 if (player.unspentStatPoints <= 0) return;
                 player.unspentStatPoints--;
@@ -466,7 +480,7 @@
                 updateStatsMenu();
             }
 
-            // ===== VFX HELPERS (ADDED Afterimages) =====
+            // ===== VFX HELPERS (Unchanged) =====
             function createDamageNumber(amount, x, y, color = "#ffffff") {
                 damageNumbers.push({
                     text: Math.ceil(amount).toString(),
@@ -511,7 +525,7 @@
                 });
             }
 
-            // ===== COMBAT HELPERS (MODIFIED for Combo/DPS) =====
+            // ===== COMBAT HELPERS (Unchanged) =====
             function rectCollide(a, b) {
                 return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + a.h && a.y + a.h > b.y;
             }
@@ -590,11 +604,18 @@
                 }
             }
             
-            // NPC Basic Attack (Conceptual for Defense Build reflection) - Unchanged
+            // NPC Basic Attack (Conceptual for Defense Build reflection)
             function dealDamageToPlayer(amount) {
                 if (player.invincible) return;
 
-                let incomingDmg = amount - player.stats.defense;
+                let incomingDmg = amount;
+                
+                if (player.isBlocking) {
+                    incomingDmg *= 0.1; // 90% damage reduction
+                    createDamageNumber("Block!", player.x + player.w / 2, player.y - 10, "#888");
+                }
+
+                incomingDmg = incomingDmg - player.stats.defense;
                 if (incomingDmg < 1) incomingDmg = 1;
 
                 // Defense Build - Reflect Logic
@@ -608,7 +629,7 @@
                 if (player.hp < 0) player.hp = 0;
             }
             
-            // Simulation of NPC attacking every 2 seconds - Unchanged
+            // Simulation of NPC attacking every 2 seconds (Unchanged)
             setInterval(() => {
                 if (npc.alive && !menuOpen) {
                     if (Math.abs(player.x - npc.x) < 100) {
@@ -624,7 +645,7 @@
             }, 2000);
 
 
-            // ===================== UNIVERSAL & BUILD ABILITIES (VFX Added) =====================
+            // ===================== UNIVERSAL & BUILD ABILITIES (Unchanged) =====================
             function universalPunch() {
                 if (player.attackCooldown <= 0) {
                     player.attackTime = 10;
@@ -636,28 +657,32 @@
                 }
             }
 
-            // --- SPEED BUILD ABILITIES --- (VFX ADDED)
-            function speed_ability1() { // Dash Burst
-                if (abilityCooldowns[0] > 0 || player.stamina < 30) return;
+            // UNIVERSAL DASH FUNCTION (Triggered by 'Q')
+            function dashMove() {
+                // Using abilityCooldowns[3] to track dash cooldown
+                if (abilityCooldowns[3] > 0 || player.stamina < 30 || player.isDashing) return;
+                
                 player.stamina -= 30;
-                abilityCooldowns[0] = 70;
-                player.dashTime = 15;
+                abilityCooldowns[3] = 70; // 1.1s cooldown
+                player.dashTime = 15; // Frames of dash movement
+                player.isDashing = true; // Start dashing
+                player.hasDashHit = false; // Reset hit flag
                 player.velX = player.facing * 18;
                 burstParticles(player.x, player.y + player.h / 2, "#4aff00", 20, 5);
+                
                 // VFX: Afterimages
                 const interval = setInterval(() => {
-                    if (player.dashTime > 0) {
+                    if (player.isDashing) {
                         createAfterimage(player.x, player.y, player.w, player.h, "#00ff0055");
                     } else {
                         clearInterval(interval);
                     }
                 }, 40);
-                setTimeout(() => {
-                    let dmg = player.stats.speed * 2.5;
-                    dealDamageToNPC(dmg, true);
-                    triggerScreenShake(10, 5);
-                }, 200);
             }
+
+
+            // --- SPEED BUILD ABILITIES (Unchanged) --- 
+            function speed_ability1() { /* Dash is now universal (dashMove) */ } 
 
             function speed_ability2() { // Double Jump
                 if (abilityCooldowns[1] > 0) return;
@@ -680,7 +705,7 @@
                 }, 1000);
             }
 
-            // --- STRENGTH BUILD ABILITIES --- (VFX ADDED)
+            // --- STRENGTH BUILD ABILITIES (Unchanged) --- 
             function strength_ability1() { // Ground Smash
                 if (abilityCooldowns[0] > 0 || player.energy < 30) return;
                 player.energy -= 30;
@@ -725,8 +750,8 @@
                 }, 4000);
             }
 
-            // --- DEFENSE BUILD ABILITIES --- (Unchanged, primarily status effects)
-            function defense_ability1() { // Shield Wall
+            // --- DEFENSE BUILD ABILITIES (Unchanged) ---
+            function defense_ability1() { // Shield Wall (Mapped to '1' now)
                 if (abilityCooldowns[0] > 0 || player.energy < 15) return;
                 player.energy -= 15;
                 abilityCooldowns[0] = 120;
@@ -759,7 +784,7 @@
                 }, 3000);
             }
 
-            // --- ENERGY BUILD ABILITIES --- (VFX ADDED)
+            // --- ENERGY BUILD ABILITIES (Unchanged) --- 
             function energy_ability1() { // Fireball
                 if (abilityCooldowns[0] > 0 || player.energy < 25) return;
                 player.energy -= 25;
@@ -798,8 +823,8 @@
             // ===================== ABILITY HANDLER & INPUT (Unchanged) =====================
             function ability1() {
                 if (menuOpen) return;
-                if (savedBuild === 'Speed') speed_ability1();
-                else if (savedBuild === 'Strength') strength_ability1();
+                // Speed Build: Dash used to be here, now mapped to 'Q' (dashMove)
+                if (savedBuild === 'Strength') strength_ability1();
                 else if (savedBuild === 'Defense') defense_ability1();
                 else if (savedBuild === 'Energy') energy_ability1();
             }
@@ -832,7 +857,7 @@
                 }
             }
             
-            // ===== NEW: DPS & Combo Update Logic =====
+            // ===== DPS & Combo Update Logic (Unchanged) =====
             function updateCombatMetrics() {
                 // Combo Timer
                 if (combatMetrics.comboTimer > 0) {
@@ -855,24 +880,44 @@
             function update() {
                 if (menuOpen) return;
 
-                // Player Movement, Physics, etc. (Unchanged)
+                // Player Movement, Physics, etc.
                 player.velY += 0.8;
                 if (keys["a"]) player.facing = -1;
                 if (keys["d"]) player.facing = 1;
-                let moveSpeed = keys["shift"] && player.stamina > 0 ? player.stats.speed * 1.7 : player.stats.speed;
                 
-                // Stamina & Energy management (Unchanged)
-                if (keys["shift"] && player.stamina > 0) player.stamina -= 0.5;
-                else player.stamina += 0.4;
+                let moveSpeed = player.stats.speed;
+                // If dashing, ignore speed modifier, if blocking, slow down.
+                if (player.isDashing) {
+                    // Velocity is already set in dashMove, we just let it decay (below)
+                } else if (player.isBlocking) {
+                    moveSpeed *= 0.3; // Slow while blocking
+                } else if (keys["shift"] && player.stamina > 0) {
+                    moveSpeed *= 1.7; // Sprinting
+                }
+                
+                // Stamina & Energy management
+                if (player.isBlocking && player.stamina > 0) {
+                    player.stamina -= 0.8;
+                } else if (keys["shift"] && player.stamina > 0) {
+                    player.stamina -= 0.5;
+                } else {
+                    player.stamina += 0.4;
+                }
                 player.stamina = Math.max(0, Math.min(100, player.stamina));
 
                 player.energy += 0.5;
                 player.energy = Math.min(player.stats.energy, player.energy);
 
 
-                if (keys["a"]) player.velX = -moveSpeed;
-                else if (keys["d"]) player.velX = moveSpeed;
-                else player.velX *= 0.8;
+                if (!player.isDashing) { // Only allow manual movement if not dashing
+                    if (keys["a"]) player.velX = -moveSpeed;
+                    else if (keys["d"]) player.velX = moveSpeed;
+                    else player.velX *= 0.8;
+                } else {
+                    // While dashing, gradually reduce velocity for a smooth stop
+                    player.velX *= 0.95;
+                }
+                
 
                 if (keys[" "] && player.jumpCount < player.maxJumps) {
                     player.velY = -12;
@@ -881,15 +926,7 @@
                     keys[" "] = false;
                 }
 
-                if (player.dashTime > 0) player.dashTime--;
-                if (player.dashCooldown > 0) player.dashCooldown--;
-
-                // UNIVERSAL PUNCH (LMB)
-                if (mouseDown) universalPunch();
-                if (player.attackTime > 0) player.attackTime--;
-                if (player.attackCooldown > 0) player.attackCooldown--;
-
-                // POSITION (Unchanged)
+                // POSITION
                 player.x += player.velX;
                 player.y += player.velY;
                 const ground = canvas.height - 80;
@@ -898,6 +935,47 @@
                     player.velY = 0;
                     player.jumpCount = 0;
                 }
+
+                // DASH HIT DETECTION (Damage on Impact)
+                if (player.isDashing && npc.alive && !player.hasDashHit) {
+                    let dashHitbox = { 
+                        x: player.x,
+                        y: player.y,
+                        w: player.w,
+                        h: player.h
+                    };
+                    let npcBox = getNPCBox();
+
+                    if (rectCollide(dashHitbox, npcBox)) {
+                        const dashPunchDamage = player.stats.strength * 2.5;
+                        dealDamageToNPC(dashPunchDamage, true);
+
+                        // Stop the dash immediately and apply effects
+                        player.velX = 0;
+                        player.isDashing = false; 
+                        player.dashTime = 0; // Ensure timer resets
+                        player.hasDashHit = true;
+
+                        player.attackTime = 10; // Visual cue for punch
+                        triggerScreenShake(10, 5);
+                    }
+                }
+                
+                if (player.dashTime > 0) player.dashTime--;
+                
+                // Reset dash state if time runs out naturally
+                if (player.isDashing && player.dashTime <= 0) {
+                    player.isDashing = false;
+                    player.velX *= 0.8; // Apply natural drag after dash finishes
+                }
+
+
+                if (player.dashCooldown > 0) player.dashCooldown--;
+
+                // UNIVERSAL PUNCH (LMB)
+                if (mouseDown) universalPunch();
+                if (player.attackTime > 0) player.attackTime--;
+                if (player.attackCooldown > 0) player.attackCooldown--;
 
                 // VFX & COOLDOWN UPDATES
                 for (let i = particles.length - 1; i >= 0; i--) {
@@ -916,20 +994,20 @@
                     d.life--;
                     if (d.life <= 0) damageNumbers.splice(i, 1);
                 }
-                for (let i = afterimages.length - 1; i >= 0; i--) { // NEW: Afterimage update
+                for (let i = afterimages.length - 1; i >= 0; i--) { // Afterimage update
                     afterimages[i].life--;
                     if (afterimages[i].life <= 0) afterimages.splice(i, 1);
                 }
-                for (let i = vfxQueue.length - 1; i >= 0; i--) { // NEW: VFX Queue update
+                for (let i = vfxQueue.length - 1; i >= 0; i--) { // VFX Queue update
                     vfxQueue[i].life--;
                     if (vfxQueue[i].life <= 0) vfxQueue.splice(i, 1);
                 }
 
 
                 updateAbilityCooldowns();
-                updateCombatMetrics(); // NEW: Update DPS and Combo
+                updateCombatMetrics(); // Update DPS and Combo
 
-                // CAMERA & SCREEN SHAKE UPDATE (Unchanged)
+                // CAMERA & SCREEN SHAKE UPDATE
                 if (screenShakeTime > 0) {
                     screenShakeTime--;
                 }
@@ -938,7 +1016,7 @@
                 // UI UPDATES
                 updateMainHUD();
                 updateCooldownUI();
-                updateCombatUI(); // NEW: Update Combo/DPS HUD
+                updateCombatUI(); // Update Combo/DPS HUD
             }
 
             // ===== UI / HUD Features =====
@@ -963,19 +1041,28 @@
                 }
             }
 
-            // Cooldowns (skill timers) (Unchanged)
+            // Cooldowns (skill timers) - Updated max cooldowns (Unchanged)
             function updateCooldownUI() {
-                const maxCooldowns = [70, 90, 180, 0];
-                for (let i = 0; i < 4; i++) {
+                // Ability 1, 2, 3, Dash (Q)
+                const maxCooldowns = [90, 90, 180, 70]; 
+                
+                // Slots 1, 2, 3 use index 0, 1, 2
+                for (let i = 0; i < 3; i++) {
                     const cooldown = abilityCooldowns[i];
                     const max = maxCooldowns[i] || 1;
                     let ratio = cooldown / max;
                     if (ratio < 0) ratio = 0;
                     document.getElementById("cool" + (i + 1)).style.clipPath = `inset(${ratio * 100}% 0 0 0)`;
                 }
+                
+                // Slot 4 (Punch/Dash placeholder) uses index 3 for the dash cooldown
+                const dashCooldown = abilityCooldowns[3];
+                const dashMax = maxCooldowns[3];
+                const dashRatio = dashCooldown / dashMax;
+                document.getElementById("cool4").style.clipPath = `inset(${dashRatio * 100}% 0 0 0)`;
             }
             
-            // Upgrade / Skill Menu (Stats) (Unchanged)
+            // Upgrade / Skill Menu (Stats) - Updates menu on open/stat spending
             function updateStatsMenu() {
                 document.getElementById('statPoints').innerText = player.unspentStatPoints;
                 document.getElementById('menuStr').innerText = player.stats.strength;
@@ -984,13 +1071,14 @@
                 document.getElementById('menuHp').innerText = player.maxHp;
                 document.getElementById('menuEng').innerText = player.stats.energy;
 
+                // Show/hide buttons based on unspent points
                 const buttons = document.querySelectorAll('#statsMenu .statButton');
                 buttons.forEach(btn => {
                     btn.style.display = player.unspentStatPoints > 0 ? 'inline-block' : 'none';
                 });
             }
 
-            // NEW: Combat Metrics UI (Combo/DPS)
+            // NEW: Combat Metrics UI (Combo/DPS) (Unchanged)
             function updateCombatUI() {
                 document.getElementById('dpsMeter').innerText = `DPS: ${combatMetrics.dps.toFixed(1)}`;
 
@@ -1004,8 +1092,8 @@
                 }
             }
 
-            // ===== DRAW LOOP (Modified for Afterimages and VFX) =====
-            const vfxQueue = []; // NEW: For drawing complex VFX like shockwaves
+            // ===== DRAW LOOP (Modified for Block visual) =====
+            const vfxQueue = []; 
 
             function draw() {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1023,11 +1111,11 @@
 
                 ctx.translate(-camX, 0);
 
-                // GROUND (Unchanged)
+                // GROUND
                 ctx.fillStyle = "#222";
                 ctx.fillRect(camX, canvas.height - 80, canvas.width * 2, 80);
                 
-                // NEW: AFTERIMAGES
+                // AFTERIMAGES
                 for (let img of afterimages) {
                     ctx.fillStyle = img.color;
                     ctx.globalAlpha = img.life / 15 * 0.5;
@@ -1036,7 +1124,7 @@
                 ctx.globalAlpha = 1;
 
 
-                // NPC (Unchanged)
+                // NPC
                 if (npc.alive) {
                     let npcBox = getNPCBox();
                     ctx.fillStyle = "#f33";
@@ -1050,24 +1138,45 @@
                     ctx.globalAlpha = 0.5 + Math.sin(Date.now() / 50) * 0.3;
                 } else if (player.berserkMode) {
                     ctx.fillStyle = "#ff5555";
+                } else if (player.isBlocking) { // Blocking Visual
+                    ctx.fillStyle = "#aaa";
+                } else if (player.isDashing) { // Dashing Visual
+                    ctx.fillStyle = "#4aff00";
                 }
                 ctx.fillRect(player.x, player.y, player.w, player.h);
                 ctx.globalAlpha = 1;
 
-                // ATTACK HITBOX (Unchanged)
+                // BLOCK SHIELD EFFECT
+                if (player.isBlocking) {
+                    ctx.strokeStyle = "#ffffff";
+                    ctx.lineWidth = 3;
+                    ctx.globalAlpha = 0.8;
+                    ctx.beginPath();
+                    // Draw a half-circle shield in the direction the player is facing
+                    if (player.facing === 1) {
+                         ctx.arc(player.x + player.w, player.y + player.h / 2, 25, Math.PI / 2, -Math.PI / 2);
+                    } else {
+                         ctx.arc(player.x, player.y + player.h / 2, 25, -Math.PI / 2, Math.PI / 2);
+                    }
+                    ctx.stroke();
+                    ctx.globalAlpha = 1;
+                }
+
+
+                // ATTACK HITBOX
                 if (player.attackTime > 0) {
                     let hitbox = getAttackBox();
                     ctx.fillStyle = "rgba(255,255,255,0.3)";
                     ctx.fillRect(hitbox.x, hitbox.y, hitbox.w, hitbox.h);
                 }
 
-                // PARTICLES (Unchanged)
+                // PARTICLES
                 for (let p of particles) {
                     ctx.fillStyle = p.color;
                     ctx.fillRect(p.x, p.y, p.size, p.size);
                 }
 
-                // NEW: COMPLEX VFX (Shockwaves/Trails)
+                // COMPLEX VFX (Shockwaves/Trails)
                 for (let vfx of vfxQueue) {
                     ctx.globalAlpha = vfx.life / 30;
                     if (vfx.type === 'shockwave') {
@@ -1106,7 +1215,7 @@
                 ctx.restore();
             }
 
-            // ===== GAME LOOP =====
+            // ===== GAME LOOP (Unchanged) =====
             function loop() {
                 update();
                 draw();
