@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
     <head>
-        <title>Fracture - Game</title>
+        <title>Fracture - Game (VFX Update)</title>
         <style>
             body {
                 margin: 0;
@@ -65,7 +65,7 @@
                 text-shadow: 0 0 5px #0ff;
             }
 
-            /* NEW: DPS Meter & Combo Counter Container */
+            /* DPS Meter & Combo Counter Container */
             #combatInfo {
                 position: fixed;
                 top: 10px;
@@ -299,7 +299,7 @@
             canvas.width = innerWidth;
             canvas.height = innerHeight;
             
-            // ===== PLAYER STATS (Default values) =====
+            // ===== PLAYER STATS =====
             const player = {
                 x: 0,
                 y: 0,
@@ -336,23 +336,22 @@
                 }
             };
 
-            // ===== COMBAT METRICS (NEW) =====
+            // ===== COMBAT METRICS =====
             const combatMetrics = {
                 totalDamage: 0,
-                damageLog: [], // Stores { time: Date.now(), damage: amount }
+                damageLog: [],
                 comboCount: 0,
-                comboTimer: 0, // Frames until combo resets (e.g., 60 frames = 1 second)
+                comboTimer: 0,
                 maxCombo: 0,
                 dps: 0
             };
-            const COMBO_RESET_TIME = 90; // 1.5 seconds at 60 FPS
+            const COMBO_RESET_TIME = 90;
 
-            // Leveling curve (Example: Linear increase)
             function getXPForLevel(level) {
                 return 100 + (level - 1) * 50; 
             }
 
-            // ===== CHARACTER CREATOR/BUILD SELECTION (Simulated) =====
+            // ===== CHARACTER CREATOR/BUILD SELECTION =====
             const savedBuild = localStorage.getItem('fracture_charbuild') || 'Strength';
             
             const buildStats = {
@@ -362,7 +361,6 @@
                 'Energy': { str: 10, spd: 4, def: 0, maxHp: 100, energy: 150, abilityNames: ["Fireball", "Energy Beam", "Teleport", "Punch"] }
             };
 
-            // Apply build stats
             const b = buildStats[savedBuild];
             player.stats.strength = b.str;
             player.stats.speed = b.spd;
@@ -374,14 +372,13 @@
             player.energy = player.stats.energy;
             player.xpToNextLevel = getXPForLevel(player.level);
 
-            // Update UI names
             document.getElementById("name1").innerText = b.abilityNames[0];
             document.getElementById("name2").innerText = b.abilityNames[1];
             document.getElementById("name3").innerText = b.abilityNames[2];
-            document.getElementById("name4").innerText = "Dash/Punch"; // Explicitly set universal ability name
-            document.getElementById("abilityTitle").innerHTML = `${savedBuild} Build Active / **DASH (Q)** / **BLOCK (F)**`; // Updated title
+            document.getElementById("name4").innerText = "Dash/Punch";
+            document.getElementById("abilityTitle").innerHTML = `${savedBuild} Build Active / **DASH (Q)** / **BLOCK (F)**`;
 
-            // ===== NPC ===== (Giving XP upon defeat)
+            // ===== NPC ===== 
             const npc = {
                 x: 400,
                 y: 0,
@@ -391,14 +388,16 @@
                 maxHp: 300,
                 alive: true,
                 xpValue: 50,
-                // New: Vertical movement state for Uppercut/Downslam
                 isAirborne: false,
                 airborneVelY: 0,
-                airborneLife: 0 // Frames remaining in air control
+                airborneLife: 0,
+                // NEW: Physics & Visuals
+                velX: 0,
+                hitFlashTimer: 0
             };
             const GROUND_Y = canvas.height - 80;
 
-            // ===== INPUT & VFX ARRAYS =====
+            // ===== INPUT =====
             const keys = {};
             document.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
             document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
@@ -413,21 +412,20 @@
                     document.getElementById('statsMenu').style.display = menuOpen ? 'block' : 'none';
                     if (menuOpen) updateStatsMenu(); 
                 }
-                if (e.key.toLowerCase() === 'q') { // Q for Dash
+                if (e.key.toLowerCase() === 'q') {
                     dashMove(); 
                 }
-                 // NEW: F to Block
                 if (e.key.toLowerCase() === 'f' && player.stamina > 0) {
                     player.isBlocking = true;
                 }
             });
             document.addEventListener("keyup", (e) => {
-                 if (e.key.toLowerCase() === 'f') { // Stop Blocking
+                 if (e.key.toLowerCase() === 'f') {
                     player.isBlocking = false;
                  }
             });
 
-
+            // ===== VFX ARRAYS =====
             const damageNumbers = [];
             const particles = [];
             const afterimages = []; 
@@ -442,7 +440,7 @@
                 shakeIntensity = intensity;
             }
 
-            // ===== XP & LEVEL UP LOGIC (LEVEL UP GRANTS STAT POINTS) =====
+            // ===== XP & LEVEL UP =====
             function gainXP(amount) {
                 if (!player.alive) return;
                 player.xp += amount;
@@ -457,19 +455,16 @@
                 player.xp -= player.xpToNextLevel;
                 player.level++;
                 player.xpToNextLevel = getXPForLevel(player.level);
-                player.unspentStatPoints += 3; // GRANTS 3 POINTS PER LEVEL UP
+                player.unspentStatPoints += 3;
 
-                // Full heal upon level up
                 player.hp = player.maxHp;
                 player.energy = player.stats.energy;
 
-                // VFX for level up
                 triggerScreenShake(20, 10);
                 burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#f0f", 50, 15);
                 createDamageNumber("LEVEL UP!", player.x + player.w / 2, player.y - 40, "#f0f");
             }
 
-            // STAT DISTRIBUTION LOGIC
             function distributeStat(stat) {
                 if (player.unspentStatPoints <= 0) return;
                 player.unspentStatPoints--;
@@ -486,7 +481,7 @@
                 updateStatsMenu();
             }
 
-            // ===== VFX HELPERS (Unchanged) =====
+            // ===== VFX HELPERS =====
             function createDamageNumber(amount, x, y, color = "#ffffff") {
                 damageNumbers.push({
                     text: Math.ceil(amount).toString(),
@@ -523,6 +518,21 @@
                 }
             }
 
+            // NEW: Directional Burst (Sparks/Blood fly away from hit)
+            function directionalBurst(x, y, color, count, directionX, spread = 0.5) {
+                for (let i = 0; i < count; i++) {
+                    particles.push({
+                        x, y,
+                        size: Math.random() * 4 + 2,
+                        // Velocity biased towards directionX
+                        velX: (directionX * (Math.random() * 5 + 2)) + (Math.random() * 2 - 1),
+                        velY: (Math.random() * -6) + 2,
+                        life: 25,
+                        color
+                    });
+                }
+            }
+
             function createAfterimage(x, y, w, h, color) {
                 afterimages.push({
                     x, y, w, h,
@@ -531,7 +541,7 @@
                 });
             }
 
-            // ===== COMBAT HELPERS (Modified to include NPC airborne state) =====
+            // ===== COMBAT SYSTEM (UPDATED FOR KNOCKBACK & VFX) =====
             function rectCollide(a, b) {
                 return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + a.h && a.y + a.h > b.y;
             }
@@ -540,7 +550,7 @@
                 const ground = GROUND_Y;
                 return {
                     x: npc.x,
-                    y: ground - npc.h,
+                    y: npc.isAirborne ? npc.y : ground - npc.h, // Fixed hitbox for airborne
                     w: npc.w,
                     h: npc.h
                 };
@@ -556,78 +566,92 @@
                 };
             }
 
-            function dealDamageToNPC(amount, isAbility = false) {
+            // UPDATED: Added knockbackForce parameter
+            function dealDamageToNPC(amount, isAbility = false, knockbackForce = 0) {
                 let npcBox = getNPCBox();
                 let hitbox = getAttackBox();
                 let finalDmg = amount;
 
                 if (rectCollide(hitbox, npcBox) && npc.alive) {
-                    // Critical Hit Logic
+                    // Critical Hit
                     let dmgColor = isAbility ? "#00ffff" : "#ffffff";
                     let isCrit = Math.random() < 0.1;
-
                     if (isCrit) {
                         finalDmg *= 1.5;
                         dmgColor = "#ff00ff";
                     }
-
-                    // Berserk Bonus
-                    if (player.berserkMode) {
-                        finalDmg *= 1.25;
-                    }
+                    if (player.berserkMode) finalDmg *= 1.25;
 
                     npc.hp -= finalDmg;
 
-                    // --- COMBAT METRICS UPDATE ---
+                    // --- PHYSICS: KNOCKBACK ---
+                    // Determine direction from player to NPC
+                    let knockDir = (player.x + player.w/2 < npc.x + npc.w/2) ? 1 : -1;
+                    npc.velX = knockDir * knockbackForce;
+
+                    // --- VFX: HIT FLASH ---
+                    npc.hitFlashTimer = 6; // Flash white for 6 frames
+
+                    // --- VFX: PARTICLES ---
+                    // Sparks fly in direction of knockback
+                    directionalBurst(npcBox.x + npcBox.w/2, npcBox.y + npcBox.h/2, "#fff", 8, knockDir);
+                    // "Blood" / Energy fly up
+                    burstParticles(npcBox.x + npcBox.w/2, npcBox.y + npcBox.h/2, "#ff0000", 5, 5);
+                    
+                    // --- VFX: IMPACT RING ---
+                    vfxQueue.push({ type: 'impactRing', x: npcBox.x + npcBox.w/2, y: npcBox.y + npcBox.h/2, color: "#fff", life: 10, size: 5 });
+
+
+                    // --- METRICS ---
                     combatMetrics.totalDamage += finalDmg;
                     combatMetrics.damageLog.push({ time: Date.now(), damage: finalDmg });
                     combatMetrics.comboCount++;
                     combatMetrics.comboTimer = COMBO_RESET_TIME;
                     combatMetrics.maxCombo = Math.max(combatMetrics.maxCombo, combatMetrics.comboCount);
 
-                    document.getElementById('comboCounter').style.transform = 'scale(1.2)'; // Combo shake VFX
+                    document.getElementById('comboCounter').style.transform = 'scale(1.2)';
                     setTimeout(() => {
                         document.getElementById('comboCounter').style.transform = 'scale(1.0)';
                     }, 50);
 
-                    // --- SCREEN SHAKE ---
-                    if (isAbility) {
-                        triggerScreenShake(12, 6);
-                    } else {
-                        triggerScreenShake(5, 2);
-                    }
-                    // --------------------
+                    if (isAbility) triggerScreenShake(12, 6);
+                    else triggerScreenShake(5, 2);
 
                     createDamageNumber(finalDmg, npcBox.x + npcBox.w / 2, npcBox.y, dmgColor);
-                    burstParticles(npc.x + npc.w / 2, npc.y + npc.h / 2, "#f44");
                     document.getElementById("npcHpBar").style.display = "block";
                     
                     if (npc.hp <= 0 && npc.alive) {
                         npc.alive = false;
                         gainXP(npc.xpValue);
-                        combatMetrics.comboCount = 0; // Reset combo on kill
+                        combatMetrics.comboCount = 0;
+                        
+                        // Death Explosion
+                        burstParticles(npc.x + npc.w / 2, npc.y + npc.h / 2, "#f00", 50, 10);
+                        triggerScreenShake(15, 8);
                     }
                 }
             }
             
-            // NPC Basic Attack (Conceptual for Defense Build reflection)
             function dealDamageToPlayer(amount) {
                 if (player.invincible) return;
 
                 let incomingDmg = amount;
                 
                 if (player.isBlocking) {
-                    incomingDmg *= 0.1; // 90% damage reduction
+                    incomingDmg *= 0.1;
                     createDamageNumber("Block!", player.x + player.w / 2, player.y - 10, "#888");
+                    // Spark on shield hit
+                    directionalBurst(player.x + player.w/2, player.y + player.h/2, "#00ccff", 5, player.facing);
+                } else {
+                    triggerScreenShake(5, 3); // Shake when player gets hit
                 }
 
                 incomingDmg = incomingDmg - player.stats.defense;
                 if (incomingDmg < 1) incomingDmg = 1;
 
-                // Defense Build - Reflect Logic
                 if (player.stats.reflectDamage > 0) {
                     let reflectedDmg = incomingDmg * player.stats.reflectDamage;
-                    dealDamageToNPC(reflectedDmg, true); 
+                    dealDamageToNPC(reflectedDmg, true, 2); 
                     createDamageNumber(reflectedDmg + " Reflect", npc.x + npc.w / 2, npc.y - 10, "#00ff00");
                 }
 
@@ -635,7 +659,6 @@
                 if (player.hp < 0) player.hp = 0;
             }
             
-            // Simulation of NPC attacking every 2 seconds (Unchanged)
             setInterval(() => {
                 if (npc.alive && !menuOpen) {
                     if (Math.abs(player.x - npc.x) < 100) {
@@ -646,66 +669,63 @@
                     npc.hp = npc.maxHp;
                     npc.alive = true;
                     document.getElementById("npcHpBar").style.display = "none";
+                    npc.x = 400; // Reset position
                 }
-
             }, 2000);
 
 
-            // ===================== UNIVERSAL & BUILD ABILITIES (MODIFIED PUNCH) =====================
+            // ===================== ABILITIES (UPDATED PUNCH) =====================
             function universalPunch() {
                 if (player.attackCooldown <= 0) {
                     player.attackTime = 10;
                     player.attackCooldown = 20;
-                    let damage = player.stats.strength * 1.5; // Base damage increased for impact moves
+                    let damage = player.stats.strength * 1.5; 
                     let moveType = 'Punch';
                     
-                    // Check if player is airborne (not on the ground)
                     const onGround = player.y + player.h >= GROUND_Y;
+                    let knockback = 4; // Standard Knockback
                     
                     if (!onGround) {
                         if (player.velY < 0) {
-                            // Player is moving upward: Uppercut!
-                            damage *= 1.8; // Higher damage multiplier for special move
+                            damage *= 1.8;
                             moveType = 'Uppercut';
+                            knockback = 1; // Less horizontal, more vertical (logic handled in hit block)
                         } else if (player.velY > 0) {
-                            // Player is moving downward: Downslam!
-                            damage *= 2.2; // Highest damage multiplier
+                            damage *= 2.2;
                             moveType = 'Downslam';
+                            knockback = 0;
                         }
                     }
 
-                    dealDamageToNPC(damage, false);
+                    // Passing knockback here
+                    dealDamageToNPC(damage, false, knockback);
                     
-                    // Check for hit and apply special effects/movement
                     let npcBox = getNPCBox();
                     let hitbox = getAttackBox();
 
                     if (rectCollide(hitbox, npcBox) && npc.alive) {
                         if (moveType === 'Uppercut') {
-                            // VFX: Strong upward burst and screen flash
                             vfxQueue.push({ type: 'shockwave', x: npc.x + npc.w / 2, y: npc.y + npc.h / 2, color: "#ffffff", life: 15, radius: 10, maxRadius: 150 });
                             burstParticles(npc.x + npc.w / 2, npc.y + npc.h / 2, "#fff", 50, 10);
                             triggerScreenShake(8, 5);
 
-                            // Movement: Launch NPC up and player up (dragging NPC)
                             npc.isAirborne = true;
                             npc.airborneVelY = -25;
-                            npc.airborneLife = 30; // 0.5 seconds of air control
+                            npc.airborneLife = 30;
+                            npc.velX = 0; // Stop horizontal movement for uppercut
                             
-                            player.velY = -15; // Player follows up
-                            player.jumpCount = player.maxJumps; // Reset jump for potential aerial moves
+                            player.velY = -15; 
+                            player.jumpCount = player.maxJumps; 
                         } else if (moveType === 'Downslam') {
-                            // VFX: Massive downward burst and color flash
                             vfxQueue.push({ type: 'shockwave', x: npc.x + npc.w / 2, y: GROUND_Y, color: "#ff0000", life: 30, radius: 20, maxRadius: 800 });
                             burstParticles(npc.x + npc.w / 2, npc.y + npc.h / 2, "#ff0000", 80, 15);
-                            triggerScreenShake(20, 15); // BIG SHAKE
+                            triggerScreenShake(20, 15);
 
-                            // Movement: Slam NPC down and stop player movement
-                            npc.isAirborne = false; // Immediately end airborne state
+                            npc.isAirborne = false; 
                             npc.airborneLife = 0;
-                            npc.y = GROUND_Y - npc.h; // Place NPC on ground
+                            npc.y = GROUND_Y - npc.h;
+                            npc.velX = 0; // Stop horizontal sliding
                             
-                            // Visual slam effect for NPC
                             vfxQueue.push({ type: 'impactFlash', x: npc.x + npc.w / 2, y: GROUND_Y, color: "#ffaa00", life: 10 });
 
                             player.velY = 0;
@@ -713,29 +733,22 @@
                             player.jumpCount = 0;
                         }
                     }
-
-                    // VFX: Flash Shake (small) for regular punch
-                    if (moveType === 'Punch') {
-                        triggerScreenShake(3, 1);
-                    }
                 }
             }
 
 
-            // UNIVERSAL DASH FUNCTION (Triggered by 'Q')
+            // UNIVERSAL DASH 
             function dashMove() {
-                // Using abilityCooldowns[3] to track dash cooldown
                 if (abilityCooldowns[3] > 0 || player.stamina < 30 || player.isDashing) return;
                 
                 player.stamina -= 30;
-                abilityCooldowns[3] = 70; // 1.1s cooldown
-                player.dashTime = 15; // Frames of dash movement
-                player.isDashing = true; // Start dashing
-                player.hasDashHit = false; // Reset hit flag
+                abilityCooldowns[3] = 70;
+                player.dashTime = 15;
+                player.isDashing = true; 
+                player.hasDashHit = false;
                 player.velX = player.facing * 18;
                 burstParticles(player.x, player.y + player.h / 2, "#4aff00", 20, 5);
                 
-                // VFX: Afterimages
                 const interval = setInterval(() => {
                     if (player.isDashing) {
                         createAfterimage(player.x, player.y, player.w, player.h, "#00ff0055");
@@ -746,8 +759,8 @@
             }
 
 
-            // --- SPEED BUILD ABILITIES (Unchanged) --- 
-            function speed_ability1() { /* Dash is now universal (dashMove) */ } 
+            // --- SPEED BUILD ABILITIES --- 
+            function speed_ability1() { } 
 
             function speed_ability2() { // Double Jump
                 if (abilityCooldowns[1] > 0) return;
@@ -757,12 +770,11 @@
                 spawnParticle(player.x + 20, player.y + player.h, "#0ff");
             }
 
-            function speed_ability3() { // Blur (Invinc)
+            function speed_ability3() { // Blur
                 if (abilityCooldowns[2] > 0 || player.energy < 20) return;
                 player.energy -= 20;
                 abilityCooldowns[2] = 180;
                 player.invincible = true;
-                // VFX: Screen distortion (simulated by large screen shake) & Color bursts
                 triggerScreenShake(10, 8);
                 burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#00ffff", 30, 10);
                 setTimeout(() => {
@@ -770,15 +782,14 @@
                 }, 1000);
             }
 
-            // --- STRENGTH BUILD ABILITIES (Unchanged) --- 
+            // --- STRENGTH BUILD ABILITIES --- 
             function strength_ability1() { // Ground Smash
                 if (abilityCooldowns[0] > 0 || player.energy < 30) return;
                 player.energy -= 30;
                 abilityCooldowns[0] = 90;
                 let dmg = player.stats.strength * 2.5;
-                dealDamageToNPC(dmg, true);
+                dealDamageToNPC(dmg, true, 15); // BIG KNOCKBACK
                 burstParticles(player.x + player.w / 2, GROUND_Y, "#ff0000", 30, 8);
-                // VFX: Shockwave circle
                 vfxQueue.push({ type: 'shockwave', x: player.x + player.w / 2, y: GROUND_Y, color: "#ff5500", life: 30, radius: 10, maxRadius: 500 });
                 triggerScreenShake(15, 8);
             }
@@ -789,10 +800,10 @@
                 abilityCooldowns[1] = 60;
                 let hits = 4;
                 let dmgPerHit = player.stats.strength * 0.7;
-                // VFX: Energy trails (small afterimages for each punch)
                 for (let i = 0; i < hits; i++) {
                     setTimeout(() => {
-                        dealDamageToNPC(dmgPerHit, true);
+                        // Small knockback per hit, last hit could be larger but we'll keep it consistent
+                        dealDamageToNPC(dmgPerHit, true, 2); 
                         createAfterimage(player.x + player.w, player.y, 10, player.h, "#ff880055");
                     }, i * 100);
                 }
@@ -804,19 +815,17 @@
                 abilityCooldowns[2] = 240;
                 player.berserkMode = true;
                 player.stats.defense = -5;
-                // VFX: Color bursts & Screen distortion
                 burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#ff5555", 50, 15);
                 triggerScreenShake(20, 10);
                 setTimeout(() => {
                     player.berserkMode = false;
                     player.stats.defense = buildStats[savedBuild].def;
-                    // VFX: Color bursts (exit)
                     burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#55ff55", 30, 8);
                 }, 4000);
             }
 
-            // --- DEFENSE BUILD ABILITIES (Unchanged) ---
-            function defense_ability1() { // Shield Wall (Mapped to '1' now)
+            // --- DEFENSE BUILD ABILITIES ---
+            function defense_ability1() { // Shield Wall
                 if (abilityCooldowns[0] > 0 || player.energy < 15) return;
                 player.energy -= 15;
                 abilityCooldowns[0] = 120;
@@ -827,18 +836,17 @@
                 }, 2000);
             }
 
-            function defense_ability2() { // Armor Boost (Heal)
+            function defense_ability2() { // Armor Boost
                 if (abilityCooldowns[1] > 0 || player.energy < 20) return;
                 player.energy -= 20;
                 abilityCooldowns[1] = 180;
                 let heal = player.maxHp * 0.15;
                 player.hp = Math.min(player.maxHp, player.hp + heal);
-                // VFX: Color bursts (green for heal)
                 burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#00ff00", 25, 6);
                 createDamageNumber(heal.toFixed(0) + " Heal", player.x + player.w / 2, player.y - 20, "#00ff00");
             }
 
-            function defense_ability3() { // Thorns (Reflect)
+            function defense_ability3() { // Thorns
                 if (abilityCooldowns[2] > 0 || player.energy < 10) return;
                 player.energy -= 10;
                 abilityCooldowns[2] = 180;
@@ -849,14 +857,13 @@
                 }, 3000);
             }
 
-            // --- ENERGY BUILD ABILITIES (Unchanged) --- 
+            // --- ENERGY BUILD ABILITIES --- 
             function energy_ability1() { // Fireball
                 if (abilityCooldowns[0] > 0 || player.energy < 25) return;
                 player.energy -= 25;
                 abilityCooldowns[0] = 90;
                 let dmg = player.stats.energy * 0.8;
-                dealDamageToNPC(dmg, true);
-                // VFX: Energy trails
+                dealDamageToNPC(dmg, true, 8); // Moderate knockback
                 vfxQueue.push({ type: 'projectileTrail', x: player.x + player.w / 2, y: player.y + player.h / 2, targetX: npc.x, targetY: npc.y, color: "#ff6600", life: 20 });
                 burstParticles(npc.x, npc.y + npc.h / 2, "#ff6600", 25, 6);
             }
@@ -866,9 +873,8 @@
                 player.energy -= 40;
                 abilityCooldowns[1] = 150;
                 let dmg = player.stats.energy * 1.5;
-                dealDamageToNPC(dmg, true);
+                dealDamageToNPC(dmg, true, 20); // MASSIVE KNOCKBACK
                 burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#00ffff", 40, 10);
-                // VFX: Flash Shake & Screen Distortion
                 triggerScreenShake(15, 7);
             }
 
@@ -876,19 +882,16 @@
                 if (abilityCooldowns[2] > 0 || player.energy < 15) return;
                 player.energy -= 15;
                 abilityCooldowns[2] = 60;
-                // VFX: Afterimages (before)
                 createAfterimage(player.x, player.y, player.w, player.h, "#8800ff99");
                 burstParticles(player.x, player.y + player.h / 2, "#8800ff", 15, 3);
                 player.x += player.facing * 150;
-                // VFX: Afterimages (after)
                 createAfterimage(player.x, player.y, player.w, player.h, "#8800ff99");
                 burstParticles(player.x, player.y + player.h / 2, "#8800ff", 15, 3);
             }
 
-            // ===================== ABILITY HANDLER & INPUT (Unchanged) =====================
+            // ===================== INPUT HANDLER =====================
             function ability1() {
                 if (menuOpen) return;
-                // Speed Build: Dash used to be here, now mapped to 'Q' (dashMove)
                 if (savedBuild === 'Strength') strength_ability1();
                 else if (savedBuild === 'Defense') defense_ability1();
                 else if (savedBuild === 'Energy') energy_ability1();
@@ -922,22 +925,15 @@
                 }
             }
             
-            // ===== DPS & Combo Update Logic (Unchanged) =====
             function updateCombatMetrics() {
-                // Combo Timer
                 if (combatMetrics.comboTimer > 0) {
                     combatMetrics.comboTimer--;
                 } else if (combatMetrics.comboCount > 0) {
                     combatMetrics.comboCount = 0;
                 }
-
-                // DPS Calculation (Damage in the last 3 seconds)
                 const threeSecondsAgo = Date.now() - 3000;
                 combatMetrics.damageLog = combatMetrics.damageLog.filter(entry => entry.time > threeSecondsAgo);
-                
                 const recentDamage = combatMetrics.damageLog.reduce((sum, entry) => sum + entry.damage, 0);
-                
-                // Calculate DPS: (Recent Damage / 3 seconds)
                 combatMetrics.dps = recentDamage / 3.0;
             }
 
@@ -945,39 +941,48 @@
             function update() {
                 if (menuOpen) return;
 
-                // NPC Airborne Physics (for Uppercut/Downslam)
+                // --- UPDATE NPC PHYSICS (KNOCKBACK) ---
+                if (npc.alive) {
+                    // Apply velocity
+                    npc.x += npc.velX;
+                    // Apply friction
+                    npc.velX *= 0.9;
+                    if (Math.abs(npc.velX) < 0.5) npc.velX = 0;
+                    
+                    // Hit Flash Timer
+                    if (npc.hitFlashTimer > 0) npc.hitFlashTimer--;
+
+                    // Keep inside arena (roughly)
+                    if (npc.x < -200) npc.x = -200;
+                    if (npc.x > canvas.width + 200) npc.x = canvas.width + 200;
+                }
+
                 if (npc.isAirborne) {
                     const currentGroundY = canvas.height - 80;
-                    
-                    // Apply gravity
                     npc.airborneVelY += 1.2; 
                     npc.y += npc.airborneVelY;
                     npc.airborneLife--;
                     
-                    // Stop air control if timer runs out or hits ground
                     if (npc.airborneLife <= 0 || npc.y + npc.h >= currentGroundY) {
                          npc.isAirborne = false;
-                         npc.y = currentGroundY - npc.h; // Reset to ground
+                         npc.y = currentGroundY - npc.h;
                          vfxQueue.push({ type: 'impactFlash', x: npc.x + npc.w / 2, y: currentGroundY, color: "#ffaa00", life: 10 });
                     }
                 }
 
-                // Player Movement, Physics, etc.
+                // Player Movement
                 player.velY += 0.8;
                 if (keys["a"]) player.facing = -1;
                 if (keys["d"]) player.facing = 1;
                 
                 let moveSpeed = player.stats.speed;
-                // If dashing, ignore speed modifier, if blocking, slow down.
                 if (player.isDashing) {
-                    // Velocity is already set in dashMove, we just let it decay (below)
                 } else if (player.isBlocking) {
-                    moveSpeed *= 0.3; // Slow while blocking
+                    moveSpeed *= 0.3;
                 } else if (keys["shift"] && player.stamina > 0) {
-                    moveSpeed *= 1.7; // Sprinting
+                    moveSpeed *= 1.7;
                 }
                 
-                // Stamina & Energy management
                 if (player.isBlocking && player.stamina > 0) {
                     player.stamina -= 0.8;
                 } else if (keys["shift"] && player.stamina > 0) {
@@ -986,20 +991,17 @@
                     player.stamina += 0.4;
                 }
                 player.stamina = Math.max(0, Math.min(100, player.stamina));
-
                 player.energy += 0.5;
                 player.energy = Math.min(player.stats.energy, player.energy);
 
 
-                if (!player.isDashing) { // Only allow manual movement if not dashing
+                if (!player.isDashing) { 
                     if (keys["a"]) player.velX = -moveSpeed;
                     else if (keys["d"]) player.velX = moveSpeed;
                     else player.velX *= 0.8;
                 } else {
-                    // While dashing, gradually reduce velocity for a smooth stop
                     player.velX *= 0.95;
                 }
-                
 
                 if (keys[" "] && player.jumpCount < player.maxJumps) {
                     player.velY = -12;
@@ -1008,7 +1010,6 @@
                     keys[" "] = false;
                 }
 
-                // POSITION
                 player.x += player.velX;
                 player.y += player.velY;
                 const ground = GROUND_Y;
@@ -1018,48 +1019,37 @@
                     player.jumpCount = 0;
                 }
 
-                // DASH HIT DETECTION (Damage on Impact)
                 if (player.isDashing && npc.alive && !player.hasDashHit) {
-                    let dashHitbox = { 
-                        x: player.x,
-                        y: player.y,
-                        w: player.w,
-                        h: player.h
-                    };
+                    let dashHitbox = { x: player.x, y: player.y, w: player.w, h: player.h };
                     let npcBox = getNPCBox();
 
                     if (rectCollide(dashHitbox, npcBox)) {
                         const dashPunchDamage = player.stats.strength * 2.5;
-                        dealDamageToNPC(dashPunchDamage, true);
+                        dealDamageToNPC(dashPunchDamage, true, 10); // Heavy Knockback on Dash
 
-                        // Stop the dash immediately and apply effects
                         player.velX = 0;
                         player.isDashing = false; 
-                        player.dashTime = 0; // Ensure timer resets
+                        player.dashTime = 0; 
                         player.hasDashHit = true;
 
-                        player.attackTime = 10; // Visual cue for punch
+                        player.attackTime = 10;
                         triggerScreenShake(10, 5);
                     }
                 }
                 
                 if (player.dashTime > 0) player.dashTime--;
                 
-                // Reset dash state if time runs out naturally
                 if (player.isDashing && player.dashTime <= 0) {
                     player.isDashing = false;
-                    player.velX *= 0.8; // Apply natural drag after dash finishes
+                    player.velX *= 0.8; 
                 }
-
 
                 if (player.dashCooldown > 0) player.dashCooldown--;
 
-                // UNIVERSAL PUNCH (LMB)
                 if (mouseDown) universalPunch();
                 if (player.attackTime > 0) player.attackTime--;
                 if (player.attackCooldown > 0) player.attackCooldown--;
 
-                // VFX & COOLDOWN UPDATES
                 for (let i = particles.length - 1; i >= 0; i--) {
                     let p = particles[i];
                     p.x += p.velX;
@@ -1076,34 +1066,30 @@
                     d.life--;
                     if (d.life <= 0) damageNumbers.splice(i, 1);
                 }
-                for (let i = afterimages.length - 1; i >= 0; i--) { // Afterimage update
+                for (let i = afterimages.length - 1; i >= 0; i--) { 
                     afterimages[i].life--;
                     if (afterimages[i].life <= 0) afterimages.splice(i, 1);
                 }
-                for (let i = vfxQueue.length - 1; i >= 0; i--) { // VFX Queue update
+                for (let i = vfxQueue.length - 1; i >= 0; i--) {
                     vfxQueue[i].life--;
                     if (vfxQueue[i].life <= 0) vfxQueue.splice(i, 1);
                 }
 
 
                 updateAbilityCooldowns();
-                updateCombatMetrics(); // Update DPS and Combo
+                updateCombatMetrics(); 
 
-                // CAMERA & SCREEN SHAKE UPDATE
                 if (screenShakeTime > 0) {
                     screenShakeTime--;
                 }
                 camX += ((player.x - canvas.width / 2) - camX) * 0.08;
 
-                // UI UPDATES
                 updateMainHUD();
                 updateCooldownUI();
-                updateCombatUI(); // Update Combo/DPS HUD
+                updateCombatUI(); 
             }
 
-            // ===== UI / HUD Features =====
-            
-            // Main HUD: Health, Energy, XP, Level progress (Unchanged)
+            // ===== UI UPDATES =====
             function updateMainHUD() {
                 const hpRatio = player.hp / player.maxHp;
                 document.getElementById("hpBarInner").style.width = (hpRatio * 100) + "%";
@@ -1123,12 +1109,8 @@
                 }
             }
 
-            // Cooldowns (skill timers) - Updated max cooldowns (Unchanged)
             function updateCooldownUI() {
-                // Ability 1, 2, 3, Dash (Q)
                 const maxCooldowns = [90, 90, 180, 70]; 
-                
-                // Slots 1, 2, 3 use index 0, 1, 2
                 for (let i = 0; i < 3; i++) {
                     const cooldown = abilityCooldowns[i];
                     const max = maxCooldowns[i] || 1;
@@ -1136,15 +1118,12 @@
                     if (ratio < 0) ratio = 0;
                     document.getElementById("cool" + (i + 1)).style.clipPath = `inset(${ratio * 100}% 0 0 0)`;
                 }
-                
-                // Slot 4 (Punch/Dash placeholder) uses index 3 for the dash cooldown
                 const dashCooldown = abilityCooldowns[3];
                 const dashMax = maxCooldowns[3];
                 const dashRatio = dashCooldown / dashMax;
                 document.getElementById("cool4").style.clipPath = `inset(${dashRatio * 100}% 0 0 0)`;
             }
             
-            // Upgrade / Skill Menu (Stats) - Updates menu on open/stat spending
             function updateStatsMenu() {
                 document.getElementById('statPoints').innerText = player.unspentStatPoints;
                 document.getElementById('menuStr').innerText = player.stats.strength;
@@ -1153,17 +1132,14 @@
                 document.getElementById('menuHp').innerText = player.maxHp;
                 document.getElementById('menuEng').innerText = player.stats.energy;
 
-                // Show/hide buttons based on unspent points
                 const buttons = document.querySelectorAll('#statsMenu .statButton');
                 buttons.forEach(btn => {
                     btn.style.display = player.unspentStatPoints > 0 ? 'inline-block' : 'none';
                 });
             }
 
-            // NEW: Combat Metrics UI (Combo/DPS) (Unchanged)
             function updateCombatUI() {
                 document.getElementById('dpsMeter').innerText = `DPS: ${combatMetrics.dps.toFixed(1)}`;
-
                 const comboDisplay = document.getElementById('comboCounter');
                 if (combatMetrics.comboCount > 1) {
                     comboDisplay.innerText = `${combatMetrics.comboCount}x COMBO`;
@@ -1174,14 +1150,11 @@
                 }
             }
 
-            // ===== DRAW LOOP (Modified for Block visual) =====
-            
-
+            // ===== DRAW LOOP =====
             function draw() {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.save();
 
-                // --- SCREEN SHAKE APPLICATION ---
                 let shakeOffsetX = 0;
                 let shakeOffsetY = 0;
                 if (screenShakeTime > 0) {
@@ -1189,8 +1162,6 @@
                     shakeOffsetY = (Math.random() - 0.5) * shakeIntensity;
                 }
                 ctx.translate(shakeOffsetX, shakeOffsetY);
-                // --------------------------------
-
                 ctx.translate(-camX, 0);
 
                 // GROUND
@@ -1205,15 +1176,23 @@
                 }
                 ctx.globalAlpha = 1;
 
-
                 // NPC
                 if (npc.alive) {
-                    // NPC position is now controlled by npc.y (which is relative to 0)
                     const npcDrawY = npc.isAirborne ? npc.y : GROUND_Y - npc.h;
-                    ctx.fillStyle = "#f33";
-                    ctx.fillRect(npc.x, npcDrawY, npc.w, npc.h);
                     
-                    // Air control line to show NPC is under "juggle" control
+                    // --- VFX: HIT FLASH DRAWING ---
+                    if (npc.hitFlashTimer > 0) {
+                        ctx.fillStyle = "#ffffff"; // Pure white flash
+                        ctx.shadowBlur = 20;
+                        ctx.shadowColor = "white";
+                    } else {
+                        ctx.fillStyle = "#f33"; // Normal Color
+                        ctx.shadowBlur = 0;
+                    }
+
+                    ctx.fillRect(npc.x, npcDrawY, npc.w, npc.h);
+                    ctx.shadowBlur = 0; // Reset shadow
+                    
                     if(npc.isAirborne) {
                         ctx.strokeStyle = "#ffffff";
                         ctx.lineWidth = 1;
@@ -1233,21 +1212,19 @@
                     ctx.globalAlpha = 0.5 + Math.sin(Date.now() / 50) * 0.3;
                 } else if (player.berserkMode) {
                     ctx.fillStyle = "#ff5555";
-                } else if (player.isBlocking) { // Blocking Visual
+                } else if (player.isBlocking) {
                     ctx.fillStyle = "#aaa";
-                } else if (player.isDashing) { // Dashing Visual
+                } else if (player.isDashing) {
                     ctx.fillStyle = "#4aff00";
                 }
                 ctx.fillRect(player.x, player.y, player.w, player.h);
                 ctx.globalAlpha = 1;
 
-                // BLOCK SHIELD EFFECT
                 if (player.isBlocking) {
                     ctx.strokeStyle = "#ffffff";
                     ctx.lineWidth = 3;
                     ctx.globalAlpha = 0.8;
                     ctx.beginPath();
-                    // Draw a half-circle shield in the direction the player is facing
                     if (player.facing === 1) {
                          ctx.arc(player.x + player.w, player.y + player.h / 2, 25, Math.PI / 2, -Math.PI / 2);
                     } else {
@@ -1271,7 +1248,7 @@
                     ctx.fillRect(p.x, p.y, p.size, p.size);
                 }
 
-                // COMPLEX VFX (Shockwaves/Trails/Impacts)
+                // COMPLEX VFX
                 for (let vfx of vfxQueue) {
                     ctx.globalAlpha = vfx.life / (vfx.life > 20 ? 30 : 10);
                     if (vfx.type === 'shockwave') {
@@ -1280,14 +1257,14 @@
                         ctx.strokeStyle = vfx.color;
                         ctx.lineWidth = 4;
                         ctx.beginPath();
-                        ctx.arc(vfx.x, vfx.y, currentRadius, Math.PI, 0); // Half circle from the ground
+                        ctx.arc(vfx.x, vfx.y, currentRadius, Math.PI, 0); 
                         ctx.stroke();
                     } else if (vfx.type === 'projectileTrail') {
                         ctx.fillStyle = vfx.color;
                         const maxLife = 20;
                         const progress = 1 - vfx.life / maxLife;
                         const currentX = vfx.x + (vfx.targetX - vfx.x) * progress;
-                        const currentY = vfx.y + (GROUND_Y - npc.h / 2 - vfx.y) * progress; // Targeting center of NPC
+                        const currentY = vfx.y + (GROUND_Y - npc.h / 2 - vfx.y) * progress;
                         ctx.beginPath();
                         ctx.arc(currentX, currentY, 10, 0, Math.PI * 2);
                         ctx.fill();
@@ -1297,11 +1274,18 @@
                          ctx.beginPath();
                          ctx.arc(vfx.x, vfx.y, size, 0, Math.PI * 2);
                          ctx.fill();
+                    } else if (vfx.type === 'impactRing') { // NEW RING EFFECT
+                         ctx.strokeStyle = vfx.color;
+                         ctx.lineWidth = 3;
+                         const size = vfx.size + (50 * (1 - vfx.life / 10)); // Expands
+                         ctx.beginPath();
+                         ctx.arc(vfx.x, vfx.y, size, 0, Math.PI * 2);
+                         ctx.stroke();
                     }
                 }
                 ctx.globalAlpha = 1;
 
-                // DRAW DAMAGE NUMBERS (Unchanged)
+                // DAMAGE NUMBERS
                 ctx.font = "bold 18px Arial";
                 ctx.textAlign = "center";
                 for (let d of damageNumbers) {
@@ -1318,7 +1302,6 @@
                 ctx.restore();
             }
 
-            // ===== GAME LOOP (Unchanged) =====
             function loop() {
                 update();
                 draw();
