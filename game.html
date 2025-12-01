@@ -390,8 +390,13 @@
                 hp: 300,
                 maxHp: 300,
                 alive: true,
-                xpValue: 50 
+                xpValue: 50,
+                // New: Vertical movement state for Uppercut/Downslam
+                isAirborne: false,
+                airborneVelY: 0,
+                airborneLife: 0 // Frames remaining in air control
             };
+            const GROUND_Y = canvas.height - 80;
 
             // ===== INPUT & VFX ARRAYS =====
             const keys = {};
@@ -426,6 +431,7 @@
             const damageNumbers = [];
             const particles = [];
             const afterimages = []; 
+            const vfxQueue = []; 
             let camX = 0;
             let abilityCooldowns = [0, 0, 0, 0];
             let screenShakeTime = 0;
@@ -525,13 +531,13 @@
                 });
             }
 
-            // ===== COMBAT HELPERS (Unchanged) =====
+            // ===== COMBAT HELPERS (Modified to include NPC airborne state) =====
             function rectCollide(a, b) {
                 return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + a.h && a.y + a.h > b.y;
             }
 
             function getNPCBox() {
-                const ground = canvas.height - 80;
+                const ground = GROUND_Y;
                 return {
                     x: npc.x,
                     y: ground - npc.h,
@@ -645,17 +651,76 @@
             }, 2000);
 
 
-            // ===================== UNIVERSAL & BUILD ABILITIES (Unchanged) =====================
+            // ===================== UNIVERSAL & BUILD ABILITIES (MODIFIED PUNCH) =====================
             function universalPunch() {
                 if (player.attackCooldown <= 0) {
                     player.attackTime = 10;
                     player.attackCooldown = 20;
-                    let damage = player.stats.strength + (Math.random() * 4);
+                    let damage = player.stats.strength * 1.5; // Base damage increased for impact moves
+                    let moveType = 'Punch';
+                    
+                    // Check if player is airborne (not on the ground)
+                    const onGround = player.y + player.h >= GROUND_Y;
+                    
+                    if (!onGround) {
+                        if (player.velY < 0) {
+                            // Player is moving upward: Uppercut!
+                            damage *= 1.8; // Higher damage multiplier for special move
+                            moveType = 'Uppercut';
+                        } else if (player.velY > 0) {
+                            // Player is moving downward: Downslam!
+                            damage *= 2.2; // Highest damage multiplier
+                            moveType = 'Downslam';
+                        }
+                    }
+
                     dealDamageToNPC(damage, false);
-                    // VFX: Flash Shake (small)
-                    triggerScreenShake(3, 1);
+                    
+                    // Check for hit and apply special effects/movement
+                    let npcBox = getNPCBox();
+                    let hitbox = getAttackBox();
+
+                    if (rectCollide(hitbox, npcBox) && npc.alive) {
+                        if (moveType === 'Uppercut') {
+                            // VFX: Strong upward burst and screen flash
+                            vfxQueue.push({ type: 'shockwave', x: npc.x + npc.w / 2, y: npc.y + npc.h / 2, color: "#ffffff", life: 15, radius: 10, maxRadius: 150 });
+                            burstParticles(npc.x + npc.w / 2, npc.y + npc.h / 2, "#fff", 50, 10);
+                            triggerScreenShake(8, 5);
+
+                            // Movement: Launch NPC up and player up (dragging NPC)
+                            npc.isAirborne = true;
+                            npc.airborneVelY = -25;
+                            npc.airborneLife = 30; // 0.5 seconds of air control
+                            
+                            player.velY = -15; // Player follows up
+                            player.jumpCount = player.maxJumps; // Reset jump for potential aerial moves
+                        } else if (moveType === 'Downslam') {
+                            // VFX: Massive downward burst and color flash
+                            vfxQueue.push({ type: 'shockwave', x: npc.x + npc.w / 2, y: GROUND_Y, color: "#ff0000", life: 30, radius: 20, maxRadius: 800 });
+                            burstParticles(npc.x + npc.w / 2, npc.y + npc.h / 2, "#ff0000", 80, 15);
+                            triggerScreenShake(20, 15); // BIG SHAKE
+
+                            // Movement: Slam NPC down and stop player movement
+                            npc.isAirborne = false; // Immediately end airborne state
+                            npc.airborneLife = 0;
+                            npc.y = GROUND_Y - npc.h; // Place NPC on ground
+                            
+                            // Visual slam effect for NPC
+                            vfxQueue.push({ type: 'impactFlash', x: npc.x + npc.w / 2, y: GROUND_Y, color: "#ffaa00", life: 10 });
+
+                            player.velY = 0;
+                            player.y = GROUND_Y - player.h;
+                            player.jumpCount = 0;
+                        }
+                    }
+
+                    // VFX: Flash Shake (small) for regular punch
+                    if (moveType === 'Punch') {
+                        triggerScreenShake(3, 1);
+                    }
                 }
             }
+
 
             // UNIVERSAL DASH FUNCTION (Triggered by 'Q')
             function dashMove() {
@@ -712,9 +777,9 @@
                 abilityCooldowns[0] = 90;
                 let dmg = player.stats.strength * 2.5;
                 dealDamageToNPC(dmg, true);
-                burstParticles(player.x + player.w / 2, canvas.height - 80, "#ff0000", 30, 8);
+                burstParticles(player.x + player.w / 2, GROUND_Y, "#ff0000", 30, 8);
                 // VFX: Shockwave circle
-                vfxQueue.push({ type: 'shockwave', x: player.x + player.w / 2, y: canvas.height - 80, color: "#ff5500", life: 30, radius: 10, maxRadius: 500 });
+                vfxQueue.push({ type: 'shockwave', x: player.x + player.w / 2, y: GROUND_Y, color: "#ff5500", life: 30, radius: 10, maxRadius: 500 });
                 triggerScreenShake(15, 8);
             }
 
@@ -880,6 +945,23 @@
             function update() {
                 if (menuOpen) return;
 
+                // NPC Airborne Physics (for Uppercut/Downslam)
+                if (npc.isAirborne) {
+                    const currentGroundY = canvas.height - 80;
+                    
+                    // Apply gravity
+                    npc.airborneVelY += 1.2; 
+                    npc.y += npc.airborneVelY;
+                    npc.airborneLife--;
+                    
+                    // Stop air control if timer runs out or hits ground
+                    if (npc.airborneLife <= 0 || npc.y + npc.h >= currentGroundY) {
+                         npc.isAirborne = false;
+                         npc.y = currentGroundY - npc.h; // Reset to ground
+                         vfxQueue.push({ type: 'impactFlash', x: npc.x + npc.w / 2, y: currentGroundY, color: "#ffaa00", life: 10 });
+                    }
+                }
+
                 // Player Movement, Physics, etc.
                 player.velY += 0.8;
                 if (keys["a"]) player.facing = -1;
@@ -929,7 +1011,7 @@
                 // POSITION
                 player.x += player.velX;
                 player.y += player.velY;
-                const ground = canvas.height - 80;
+                const ground = GROUND_Y;
                 if (player.y + player.h > ground) {
                     player.y = ground - player.h;
                     player.velY = 0;
@@ -1093,7 +1175,7 @@
             }
 
             // ===== DRAW LOOP (Modified for Block visual) =====
-            const vfxQueue = []; 
+            
 
             function draw() {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1113,7 +1195,7 @@
 
                 // GROUND
                 ctx.fillStyle = "#222";
-                ctx.fillRect(camX, canvas.height - 80, canvas.width * 2, 80);
+                ctx.fillRect(camX, GROUND_Y, canvas.width * 2, 80);
                 
                 // AFTERIMAGES
                 for (let img of afterimages) {
@@ -1126,9 +1208,22 @@
 
                 // NPC
                 if (npc.alive) {
-                    let npcBox = getNPCBox();
+                    // NPC position is now controlled by npc.y (which is relative to 0)
+                    const npcDrawY = npc.isAirborne ? npc.y : GROUND_Y - npc.h;
                     ctx.fillStyle = "#f33";
-                    ctx.fillRect(npcBox.x, npcBox.y, npcBox.w, npcBox.h);
+                    ctx.fillRect(npc.x, npcDrawY, npc.w, npc.h);
+                    
+                    // Air control line to show NPC is under "juggle" control
+                    if(npc.isAirborne) {
+                        ctx.strokeStyle = "#ffffff";
+                        ctx.lineWidth = 1;
+                        ctx.globalAlpha = 0.5;
+                        ctx.beginPath();
+                        ctx.moveTo(npc.x + npc.w/2, npcDrawY);
+                        ctx.lineTo(npc.x + npc.w/2, GROUND_Y - npc.h);
+                        ctx.stroke();
+                        ctx.globalAlpha = 1;
+                    }
                 }
 
                 // PLAYER
@@ -1176,11 +1271,12 @@
                     ctx.fillRect(p.x, p.y, p.size, p.size);
                 }
 
-                // COMPLEX VFX (Shockwaves/Trails)
+                // COMPLEX VFX (Shockwaves/Trails/Impacts)
                 for (let vfx of vfxQueue) {
-                    ctx.globalAlpha = vfx.life / 30;
+                    ctx.globalAlpha = vfx.life / (vfx.life > 20 ? 30 : 10);
                     if (vfx.type === 'shockwave') {
-                        const currentRadius = vfx.radius + (vfx.maxRadius - vfx.radius) * (1 - vfx.life / 30);
+                        const maxLife = 30;
+                        const currentRadius = vfx.radius + (vfx.maxRadius - vfx.radius) * (1 - vfx.life / maxLife);
                         ctx.strokeStyle = vfx.color;
                         ctx.lineWidth = 4;
                         ctx.beginPath();
@@ -1188,12 +1284,19 @@
                         ctx.stroke();
                     } else if (vfx.type === 'projectileTrail') {
                         ctx.fillStyle = vfx.color;
-                        const progress = 1 - vfx.life / 20;
+                        const maxLife = 20;
+                        const progress = 1 - vfx.life / maxLife;
                         const currentX = vfx.x + (vfx.targetX - vfx.x) * progress;
-                        const currentY = vfx.y + (getNPCBox().y + getNPCBox().h / 2 - vfx.y) * progress;
+                        const currentY = vfx.y + (GROUND_Y - npc.h / 2 - vfx.y) * progress; // Targeting center of NPC
                         ctx.beginPath();
                         ctx.arc(currentX, currentY, 10, 0, Math.PI * 2);
                         ctx.fill();
+                    } else if (vfx.type === 'impactFlash') {
+                         ctx.fillStyle = vfx.color;
+                         const size = 60 * (1 - vfx.life / 10);
+                         ctx.beginPath();
+                         ctx.arc(vfx.x, vfx.y, size, 0, Math.PI * 2);
+                         ctx.fill();
                     }
                 }
                 ctx.globalAlpha = 1;
