@@ -348,7 +348,12 @@
                     defense: 0,
                     energy: 100,
                     reflectDamage: 0
-                }
+                },
+                // NEW: Variables for tracking ground state and sprinting
+                onGround: false,
+                wasOnGround: false,
+                isSprinting: false,
+                justStartedSprinting: false
             };
 
             // ===== COMBAT METRICS =====
@@ -533,6 +538,19 @@
                         color
                     });
                 }
+            }
+            
+            // NEW: Dust Particle for movement/landing
+            function createDustParticle(x, y, directionX) {
+                particles.push({
+                    x: x + Math.random() * 10 - 5,
+                    y: y,
+                    size: Math.random() * 3 + 1,
+                    velX: (Math.random() * 2 - 1) + directionX * 1.5,
+                    velY: Math.random() * -2,
+                    life: 15,
+                    color: "#997755" // Brown/Dust color
+                });
             }
 
             // NEW: Directional Burst (Sparks/Blood fly away from hit)
@@ -1004,22 +1022,41 @@
                     }
                 }
 
-                // Player Movement
-                player.velY += 0.8;
+                // --- PLAYER MOVEMENT & PHYSICS ---
+                
+                // Track previous ground state for landing dust
+                player.wasOnGround = player.onGround;
+                const oldVelY = player.velY; // Store vertical velocity before gravity is applied
+                
+                // Gravity (Adjusted for better jump arc)
+                player.velY += 1.0; // Increased gravity from 0.8 to 1.0
+                
+                // Drag in the air
+                if (!player.onGround) player.velX *= 0.98;
+
                 if (keys["a"]) player.facing = -1;
                 if (keys["d"]) player.facing = 1;
                 
                 let moveSpeed = player.stats.speed;
+                const isMovingHorizontally = keys["a"] || keys["d"];
+
+                // Determine if sprinting
+                const isSprintingAttempt = keys["shift"] && player.stamina > 0 && isMovingHorizontally && !player.isBlocking;
+                const wasSprinting = player.isSprinting;
+                player.isSprinting = isSprintingAttempt && player.onGround && !player.isDashing;
+                player.justStartedSprinting = player.isSprinting && !wasSprinting;
+
+
                 if (player.isDashing) {
                 } else if (player.isBlocking) {
                     moveSpeed *= 0.3;
-                } else if (keys["shift"] && player.stamina > 0) {
+                } else if (player.isSprinting) {
                     moveSpeed *= 1.7;
                 }
                 
                 if (player.isBlocking && player.stamina > 0) {
                     player.stamina -= 0.8;
-                } else if (keys["shift"] && player.stamina > 0) {
+                } else if (player.isSprinting) {
                     player.stamina -= 0.5;
                 } else {
                     player.stamina += 0.4;
@@ -1036,22 +1073,53 @@
                 } else {
                     player.velX *= 0.95;
                 }
+                
+                // --- MOVEMENT VFX ---
+                
+                // Sprint Dust Burst (Start of Sprint)
+                if (player.justStartedSprinting) {
+                    for(let i = 0; i < 15; i++) {
+                        createDustParticle(player.x + player.w / 2, GROUND_Y, -player.facing);
+                    }
+                }
+                
+                // Sprint Dust Trail
+                if (player.isSprinting && Math.random() < 0.4) { // 40% chance per frame to spawn a particle
+                    createDustParticle(player.x + player.w / 2, GROUND_Y, -player.facing);
+                }
+
 
                 if (keys[" "] && player.jumpCount < player.maxJumps) {
                     player.velY = -12;
                     burstParticles(player.x + 20, player.y + player.h, "#0ff", 10, 3); // UPDATED TO BURST
                     player.jumpCount++;
                     keys[" "] = false;
+                    player.onGround = false; // Player is no longer on the ground when jumping
                 }
 
                 player.x += player.velX;
                 player.y += player.velY;
                 const ground = GROUND_Y;
-                if (player.y + player.h > ground) {
+                
+                
+                if (player.y + player.h >= ground) {
+                    // Landing Dust
+                    if (!player.wasOnGround && oldVelY > 5) { // Check if we just landed and were falling fast enough
+                        for(let i = 0; i < 20; i++) {
+                            createDustParticle(player.x + player.w / 2, ground, 0);
+                        }
+                        triggerScreenShake(3, 2);
+                    }
+
                     player.y = ground - player.h;
                     player.velY = 0;
                     player.jumpCount = 0;
+                    player.onGround = true; // Player is on the ground
+                } else {
+                    player.onGround = false; // Player is in the air
                 }
+                
+                // --- DASHING & COMBAT ---
 
                 if (player.isDashing && npc.alive && !player.hasDashHit) {
                     let dashHitbox = { x: player.x, y: player.y, w: player.w, h: player.h };
@@ -1084,6 +1152,7 @@
                 if (player.attackTime > 0) player.attackTime--;
                 if (player.attackCooldown > 0) player.attackCooldown--;
 
+                // --- VFX UPDATES ---
                 for (let i = particles.length - 1; i >= 0; i--) {
                     let p = particles[i];
                     p.x += p.velX;
