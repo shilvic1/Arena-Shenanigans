@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <html>
     <head>
-        <title>Fracture - Game</title>
+        <title>Fracture - Online Game</title>
+        <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
         <style>
             body {
                 margin: 0;
@@ -226,12 +227,45 @@
                 z-index: 5; /* Below HUD, above canvas */
                 transition: background-color 0.1s ease-out; /* Smoother flash transition */
             }
+
+            /* Online Connection Overlay */
+            #connectionOverlay {
+                position: fixed;
+                inset: 0;
+                background: rgba(0,0,0,0.85);
+                z-index: 100;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                color: #0ff;
+                font-family: monospace;
+            }
+            .loader {
+                width: 40px;
+                height: 40px;
+                border: 4px solid #0ff;
+                border-top: 4px solid transparent;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                margin-bottom: 20px;
+            }
+            @keyframes spin { 100% { transform: rotate(360deg); } }
+            #connStatus { font-size: 18px; text-transform: uppercase; letter-spacing: 2px; }
+            #connId { margin-top:10px; color: #888; font-size: 12px; }
+
         </style>
     </head>
     <body>
         <canvas id="gameCanvas"></canvas>
         <div id="lowHpOverlay"></div>
         
+        <div id="connectionOverlay">
+            <div class="loader"></div>
+            <div id="connStatus">Initializing Network...</div>
+            <div id="connId"></div>
+        </div>
+
         <div id="mainHud">
             <div id="levelDisplay">Lvl: 1</div>
             <div class="statBarContainer">
@@ -314,9 +348,28 @@
             canvas.width = innerWidth;
             canvas.height = innerHeight;
             
+            // ===== NETWORKING VARIABLES =====
+            let peer = null;
+            let conn = null;
+            let isHost = false;
+            let gameStarted = false;
+            const urlParams = new URLSearchParams(window.location.search);
+            const mode = urlParams.get('mode'); // 'host', 'join', 'quick'
+            const roomId = urlParams.get('room');
+            
+            // The other player (visual representation)
+            const otherPlayer = {
+                active: false,
+                x: -100, y: -100, w: 40, h: 60,
+                facing: 1,
+                hp: 100, maxHp: 100,
+                isDashing: false,
+                isBlocking: false
+            };
+
             // ===== PLAYER STATS =====
             const player = {
-                x: 0,
+                x: 100,
                 y: 0,
                 w: 40,
                 h: 60,
@@ -404,8 +457,8 @@
                 y: 0,
                 w: 40,
                 h: 60,
-                hp: 300,
-                maxHp: 300,
+                hp: 500, // Buffed for 2 players
+                maxHp: 500,
                 alive: true,
                 xpValue: 50,
                 isAirborne: false,
@@ -622,21 +675,28 @@
                     }
                     if (player.berserkMode) finalDmg *= 1.25;
 
-                    npc.hp -= finalDmg;
-
-                    // --- PHYSICS: KNOCKBACK ---
-                    // Determine direction from player to NPC
-                    let knockDir = (player.x + player.w/2 < npc.x + npc.w/2) ? 1 : -1;
-                    npc.velX = knockDir * knockbackForce;
+                    // If we are CLIENT, we just visually show it, the HOST syncs real HP
+                    // However, to make it responsive, we apply local prediction, but Host overrides
+                    if(isHost) {
+                        npc.hp -= finalDmg;
+                        // --- PHYSICS: KNOCKBACK ---
+                        let knockDir = (player.x + player.w/2 < npc.x + npc.w/2) ? 1 : -1;
+                        npc.velX = knockDir * knockbackForce;
+                    } else {
+                        // Send attack event to host
+                         if(conn && conn.open) {
+                             conn.send({ type: 'attack', dmg: finalDmg, force: knockbackForce });
+                         }
+                    }
 
                     // --- VFX: HIT FLASH ---
                     npc.hitFlashTimer = 6; // Flash white for 6 frames
 
                     // --- VFX: PARTICLES (Blood and Sparks) ---
                     // Sparks fly in direction of knockback
-                    directionalBurst(npcBox.x + npcBox.w/2, npcBox.y + npcBox.h/2, "#fff", 15, knockDir); // INCREASED SPARKS
-                    // "Blood" / Energy fly up
-                    directionalBurst(npcBox.x + npcBox.w/2, npcBox.y + npcBox.h/2, "#ff0000", 10, knockDir / 4, 8); // Added knockDir for subtle direction
+                    let knockDir = (player.x + player.w/2 < npc.x + npc.w/2) ? 1 : -1;
+                    directionalBurst(npcBox.x + npcBox.w/2, npcBox.y + npcBox.h/2, "#fff", 15, knockDir); 
+                    directionalBurst(npcBox.x + npcBox.w/2, npcBox.y + npcBox.h/2, "#ff0000", 10, knockDir / 4, 8);
                     
                     // --- VFX: IMPACT RING ---
                     vfxQueue.push({ type: 'impactRing', x: npcBox.x + npcBox.w/2, y: npcBox.y + npcBox.h/2, color: "#fff", life: 10, size: 5 });
@@ -660,7 +720,7 @@
                     createDamageNumber(finalDmg, npcBox.x + npcBox.w / 2, npcBox.y, dmgColor);
                     document.getElementById("npcHpBar").style.display = "block";
                     
-                    if (npc.hp <= 0 && npc.alive) {
+                    if (npc.hp <= 0 && npc.alive && isHost) {
                         npc.alive = false;
                         gainXP(npc.xpValue);
                         combatMetrics.comboCount = 0;
@@ -677,19 +737,15 @@
                 if (player.invincible) return;
 
                 let incomingDmg = amount;
-                
-                // Determine direction for particle effect
                 let npcDir = (player.x + player.w/2 < npc.x + npc.w/2) ? 1 : -1; 
                 
                 if (player.isBlocking) {
                     incomingDmg *= 0.1;
                     createDamageNumber("Block!", player.x + player.w / 2, player.y - 10, "#888");
-                    // Spark on shield hit
-                    directionalBurst(player.x + player.w/2, player.y + player.h/2, "#00ccff", 10, -npcDir); // Particles away from NPC
+                    directionalBurst(player.x + player.w/2, player.y + player.h/2, "#00ccff", 10, -npcDir);
                 } else {
-                    triggerScreenShake(10, 5); // Shake when player gets hit
-                    // NEW: Player Hit Particles (Blood/Impact)
-                    directionalBurst(player.x + player.w/2, player.y + player.h/2, "#ffaa00", 15, -npcDir); // Yellow/Orange hit particles away from NPC
+                    triggerScreenShake(10, 5);
+                    directionalBurst(player.x + player.w/2, player.y + player.h/2, "#ffaa00", 15, -npcDir);
                 }
 
                 incomingDmg = incomingDmg - player.stats.defense;
@@ -704,23 +760,32 @@
                 player.hp -= incomingDmg;
                 if (player.hp < 0) player.hp = 0;
                 
-                // NEW: Small knockback to player when hit (if not blocking)
                 if (!player.isBlocking) {
                     player.x += -npcDir * 10;
                     player.velX = -npcDir * 5;
                 }
             }
             
+            // Host logic for NPC AI
             setInterval(() => {
+                if(!isHost || !gameStarted) return;
+                
                 if (npc.alive && !menuOpen) {
+                    // Attack Host
                     if (Math.abs(player.x - npc.x) < 100) {
                         dealDamageToPlayer(15);
+                    }
+                    // Attack Remote Player (Simulated distance check)
+                    if (otherPlayer.active && Math.abs(otherPlayer.x - npc.x) < 100) {
+                        // We don't calc damage for remote, they calc it themselves or we send it
+                        // For simplicity, Host sends "NPC Attack" event
+                        if(Math.random() < 0.3) conn.send({type: 'npcAttack'});
                     }
                 }
                 if (!npc.alive) {
                     npc.hp = npc.maxHp;
                     npc.alive = true;
-                    document.getElementById("npcHpBar").style.display = "none";
+                    // document.getElementById("npcHpBar").style.display = "none";
                     npc.x = 400; // Reset position
                 }
             }, 2000);
@@ -741,7 +806,7 @@
                         if (player.velY < 0) {
                             damage *= 1.8;
                             moveType = 'Uppercut';
-                            knockback = 1; // Less horizontal, more vertical (logic handled in hit block)
+                            knockback = 1; 
                         } else if (player.velY > 0) {
                             damage *= 2.2;
                             moveType = 'Downslam';
@@ -749,7 +814,6 @@
                         }
                     }
 
-                    // Passing knockback here
                     dealDamageToNPC(damage, false, knockback);
                     
                     let npcBox = getNPCBox();
@@ -758,25 +822,29 @@
                     if (rectCollide(hitbox, npcBox) && npc.alive) {
                         if (moveType === 'Uppercut') {
                             vfxQueue.push({ type: 'shockwave', x: npc.x + npc.w / 2, y: npc.y + npc.h / 2, color: "#ffffff", life: 15, radius: 10, maxRadius: 150 });
-                            burstParticles(npc.x + npc.w / 2, npc.y + npc.h / 2, "#fff", 80, 15); // MORE PARTICLES
-                            triggerScreenShake(15, 8); // HEAVY SHAKE
+                            burstParticles(npc.x + npc.w / 2, npc.y + npc.h / 2, "#fff", 80, 15);
+                            triggerScreenShake(15, 8);
 
-                            npc.isAirborne = true;
-                            npc.airborneVelY = -25;
-                            npc.airborneLife = 30;
-                            npc.velX = 0; // Stop horizontal movement for uppercut
+                            if(isHost) {
+                                npc.isAirborne = true;
+                                npc.airborneVelY = -25;
+                                npc.airborneLife = 30;
+                                npc.velX = 0;
+                            }
                             
                             player.velY = -15; 
                             player.jumpCount = player.maxJumps; 
                         } else if (moveType === 'Downslam') {
                             vfxQueue.push({ type: 'shockwave', x: npc.x + npc.w / 2, y: GROUND_Y, color: "#ff0000", life: 30, radius: 20, maxRadius: 800 });
-                            burstParticles(npc.x + npc.w / 2, npc.y + npc.h / 2, "#ff0000", 120, 20); // MORE PARTICLES
-                            triggerScreenShake(30, 20); // HEAVY SHAKE
+                            burstParticles(npc.x + npc.w / 2, npc.y + npc.h / 2, "#ff0000", 120, 20);
+                            triggerScreenShake(30, 20);
 
-                            npc.isAirborne = false; 
-                            npc.airborneLife = 0;
-                            npc.y = GROUND_Y - npc.h;
-                            npc.velX = 0; // Stop horizontal sliding
+                            if(isHost) {
+                                npc.isAirborne = false; 
+                                npc.airborneLife = 0;
+                                npc.y = GROUND_Y - npc.h;
+                                npc.velX = 0;
+                            }
                             
                             vfxQueue.push({ type: 'impactFlash', x: npc.x + npc.w / 2, y: GROUND_Y, color: "#ffaa00", life: 10 });
 
@@ -799,7 +867,7 @@
                 player.isDashing = true; 
                 player.hasDashHit = false;
                 player.velX = player.facing * 18;
-                burstParticles(player.x, player.y + player.h / 2, "#4aff00", 30, 8); // MORE PARTICLES
+                burstParticles(player.x, player.y + player.h / 2, "#4aff00", 30, 8); 
                 
                 const interval = setInterval(() => {
                     if (player.isDashing) {
@@ -819,7 +887,7 @@
                 abilityCooldowns[1] = 90;
                 player.jumpCount = 0;
                 player.velY = -12;
-                burstParticles(player.x + 20, player.y + player.h, "#0ff", 10, 3); // UPDATED TO BURST
+                burstParticles(player.x + 20, player.y + player.h, "#0ff", 10, 3);
             }
 
             function speed_ability3() { // Blur
@@ -827,8 +895,8 @@
                 player.energy -= 20;
                 abilityCooldowns[2] = 180;
                 player.invincible = true;
-                triggerScreenShake(15, 10); // HEAVY SHAKE
-                burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#00ffff", 50, 15); // MORE PARTICLES
+                triggerScreenShake(15, 10);
+                burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#00ffff", 50, 15);
                 setTimeout(() => {
                     player.invincible = false;
                 }, 1000);
@@ -840,10 +908,10 @@
                 player.energy -= 30;
                 abilityCooldowns[0] = 90;
                 let dmg = player.stats.strength * 2.5;
-                dealDamageToNPC(dmg, true, 20); // BIG KNOCKBACK
-                burstParticles(player.x + player.w / 2, GROUND_Y, "#ff0000", 50, 12); // MORE PARTICLES
+                dealDamageToNPC(dmg, true, 20); 
+                burstParticles(player.x + player.w / 2, GROUND_Y, "#ff0000", 50, 12);
                 vfxQueue.push({ type: 'shockwave', x: player.x + player.w / 2, y: GROUND_Y, color: "#ff5500", life: 30, radius: 10, maxRadius: 500 });
-                triggerScreenShake(20, 15); // HEAVY SHAKE
+                triggerScreenShake(20, 15);
             }
 
             function strength_ability2() { // Punch Combo
@@ -854,7 +922,6 @@
                 let dmgPerHit = player.stats.strength * 0.7;
                 for (let i = 0; i < hits; i++) {
                     setTimeout(() => {
-                        // Small knockback per hit, last hit could be larger but we'll keep it consistent
                         dealDamageToNPC(dmgPerHit, true, 3); 
                         createAfterimage(player.x + player.w, player.y, 10, player.h, "#ff880055");
                     }, i * 100);
@@ -867,8 +934,8 @@
                 abilityCooldowns[2] = 240;
                 player.berserkMode = true;
                 player.stats.defense = -5;
-                burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#ff5555", 80, 20); // MORE PARTICLES
-                triggerScreenShake(25, 18); // HEAVY SHAKE
+                burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#ff5555", 80, 20);
+                triggerScreenShake(25, 18);
                 setTimeout(() => {
                     player.berserkMode = false;
                     player.stats.defense = buildStats[savedBuild].def;
@@ -882,7 +949,7 @@
                 player.energy -= 15;
                 abilityCooldowns[0] = 120;
                 player.stats.defense += 10;
-                burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#0000ff", 30, 8); // MORE PARTICLES
+                burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#0000ff", 30, 8);
                 setTimeout(() => {
                     player.stats.defense -= 10;
                 }, 2000);
@@ -894,7 +961,7 @@
                 abilityCooldowns[1] = 180;
                 let heal = player.maxHp * 0.15;
                 player.hp = Math.min(player.maxHp, player.hp + heal);
-                burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#00ff00", 40, 10); // MORE PARTICLES
+                burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#00ff00", 40, 10);
                 createDamageNumber(heal.toFixed(0) + " Heal", player.x + player.w / 2, player.y - 20, "#00ff00");
             }
 
@@ -915,9 +982,9 @@
                 player.energy -= 25;
                 abilityCooldowns[0] = 90;
                 let dmg = player.stats.energy * 0.8;
-                dealDamageToNPC(dmg, true, 10); // Moderate knockback
+                dealDamageToNPC(dmg, true, 10); 
                 vfxQueue.push({ type: 'projectileTrail', x: player.x + player.w / 2, y: player.y + player.h / 2, targetX: npc.x, targetY: npc.y, color: "#ff6600", life: 20 });
-                burstParticles(npc.x, npc.y + npc.h / 2, "#ff6600", 40, 10); // MORE PARTICLES
+                burstParticles(npc.x, npc.y + npc.h / 2, "#ff6600", 40, 10);
             }
 
             function energy_ability2() { // Energy Beam
@@ -925,9 +992,9 @@
                 player.energy -= 40;
                 abilityCooldowns[1] = 150;
                 let dmg = player.stats.energy * 1.5;
-                dealDamageToNPC(dmg, true, 25); // MASSIVE KNOCKBACK
-                burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#00ffff", 60, 15); // MORE PARTICLES
-                triggerScreenShake(20, 12); // HEAVY SHAKE
+                dealDamageToNPC(dmg, true, 25); 
+                burstParticles(player.x + player.w / 2, player.y + player.h / 2, "#00ffff", 60, 15);
+                triggerScreenShake(20, 12); 
             }
 
             function energy_ability3() { // Teleport
@@ -935,10 +1002,10 @@
                 player.energy -= 15;
                 abilityCooldowns[2] = 60;
                 createAfterimage(player.x, player.y, player.w, player.h, "#8800ff99");
-                burstParticles(player.x, player.y + player.h / 2, "#8800ff", 25, 6); // MORE PARTICLES
+                burstParticles(player.x, player.y + player.h / 2, "#8800ff", 25, 6); 
                 player.x += player.facing * 150;
                 createAfterimage(player.x, player.y, player.w, player.h, "#8800ff99");
-                burstParticles(player.x, player.y + player.h / 2, "#8800ff", 25, 6); // MORE PARTICLES
+                burstParticles(player.x, player.y + player.h / 2, "#8800ff", 25, 6); 
             }
 
             // ===================== INPUT HANDLER =====================
@@ -992,46 +1059,62 @@
             // ===== UPDATE LOOP =====
             function update() {
                 if (menuOpen) return;
-
-                // --- UPDATE NPC PHYSICS (KNOCKBACK) ---
-                if (npc.alive) {
-                    // Apply velocity
-                    npc.x += npc.velX;
-                    // Apply friction
-                    npc.velX *= 0.9;
-                    if (Math.abs(npc.velX) < 0.5) npc.velX = 0;
+                
+                // --- NETWORKING SYNC ---
+                if (gameStarted && conn && conn.open) {
+                    // Send my data
+                    conn.send({
+                        type: 'state',
+                        x: player.x,
+                        y: player.y,
+                        facing: player.facing,
+                        isDashing: player.isDashing,
+                        isBlocking: player.isBlocking,
+                        hp: player.hp // just for reference
+                    });
                     
-                    // Hit Flash Timer
-                    if (npc.hitFlashTimer > 0) npc.hitFlashTimer--;
-
-                    // Keep inside arena (roughly)
-                    if (npc.x < -200) npc.x = -200;
-                    if (npc.x > canvas.width + 200) npc.x = canvas.width + 200;
-                }
-
-                if (npc.isAirborne) {
-                    const currentGroundY = canvas.height - 80;
-                    npc.airborneVelY += 1.2; 
-                    npc.y += npc.airborneVelY;
-                    npc.airborneLife--;
-                    
-                    if (npc.airborneLife <= 0 || npc.y + npc.h >= currentGroundY) {
-                         npc.isAirborne = false;
-                         npc.y = currentGroundY - npc.h;
-                         vfxQueue.push({ type: 'impactFlash', x: npc.x + npc.w / 2, y: currentGroundY, color: "#ffaa00", life: 10 });
+                    // Host sends NPC data
+                    if (isHost && npc.alive) {
+                        conn.send({
+                            type: 'npcState',
+                            x: npc.x,
+                            y: npc.y,
+                            hp: npc.hp,
+                            isAirborne: npc.isAirborne
+                        });
                     }
                 }
 
+                // --- UPDATE NPC PHYSICS (KNOCKBACK) ---
+                if(isHost) {
+                    if (npc.alive) {
+                        npc.x += npc.velX;
+                        npc.velX *= 0.9;
+                        if (Math.abs(npc.velX) < 0.5) npc.velX = 0;
+                        if (npc.hitFlashTimer > 0) npc.hitFlashTimer--;
+                        if (npc.x < -200) npc.x = -200;
+                        if (npc.x > canvas.width + 200) npc.x = canvas.width + 200;
+                    }
+                    if (npc.isAirborne) {
+                        const currentGroundY = canvas.height - 80;
+                        npc.airborneVelY += 1.2; 
+                        npc.y += npc.airborneVelY;
+                        npc.airborneLife--;
+                        if (npc.airborneLife <= 0 || npc.y + npc.h >= currentGroundY) {
+                             npc.isAirborne = false;
+                             npc.y = currentGroundY - npc.h;
+                             vfxQueue.push({ type: 'impactFlash', x: npc.x + npc.w / 2, y: currentGroundY, color: "#ffaa00", life: 10 });
+                        }
+                    }
+                } else {
+                    // Client simply decrements flash timer, position comes from network
+                     if (npc.hitFlashTimer > 0) npc.hitFlashTimer--;
+                }
+
                 // --- PLAYER MOVEMENT & PHYSICS ---
-                
-                // Track previous ground state for landing dust
                 player.wasOnGround = player.onGround;
-                const oldVelY = player.velY; // Store vertical velocity before gravity is applied
-                
-                // Gravity (Adjusted for better jump arc)
-                player.velY += 1.0; // Increased gravity from 0.8 to 1.0
-                
-                // Drag in the air
+                const oldVelY = player.velY; 
+                player.velY += 1.0; 
                 if (!player.onGround) player.velX *= 0.98;
 
                 if (keys["a"]) player.facing = -1;
@@ -1039,13 +1122,10 @@
                 
                 let moveSpeed = player.stats.speed;
                 const isMovingHorizontally = keys["a"] || keys["d"];
-
-                // Determine if sprinting
                 const isSprintingAttempt = keys["shift"] && player.stamina > 0 && isMovingHorizontally && !player.isBlocking;
                 const wasSprinting = player.isSprinting;
                 player.isSprinting = isSprintingAttempt && player.onGround && !player.isDashing;
                 player.justStartedSprinting = player.isSprinting && !wasSprinting;
-
 
                 if (player.isDashing) {
                 } else if (player.isBlocking) {
@@ -1065,7 +1145,6 @@
                 player.energy += 0.5;
                 player.energy = Math.min(player.stats.energy, player.energy);
 
-
                 if (!player.isDashing) { 
                     if (keys["a"]) player.velX = -moveSpeed;
                     else if (keys["d"]) player.velX = moveSpeed;
@@ -1075,36 +1154,29 @@
                 }
                 
                 // --- MOVEMENT VFX ---
-                
-                // Sprint Dust Burst (Start of Sprint)
                 if (player.justStartedSprinting) {
                     for(let i = 0; i < 15; i++) {
                         createDustParticle(player.x + player.w / 2, GROUND_Y, -player.facing);
                     }
                 }
-                
-                // Sprint Dust Trail
-                if (player.isSprinting && Math.random() < 0.4) { // 40% chance per frame to spawn a particle
+                if (player.isSprinting && Math.random() < 0.4) { 
                     createDustParticle(player.x + player.w / 2, GROUND_Y, -player.facing);
                 }
 
-
                 if (keys[" "] && player.jumpCount < player.maxJumps) {
                     player.velY = -12;
-                    burstParticles(player.x + 20, player.y + player.h, "#0ff", 10, 3); // UPDATED TO BURST
+                    burstParticles(player.x + 20, player.y + player.h, "#0ff", 10, 3); 
                     player.jumpCount++;
                     keys[" "] = false;
-                    player.onGround = false; // Player is no longer on the ground when jumping
+                    player.onGround = false; 
                 }
 
                 player.x += player.velX;
                 player.y += player.velY;
                 const ground = GROUND_Y;
                 
-                
                 if (player.y + player.h >= ground) {
-                    // Landing Dust
-                    if (!player.wasOnGround && oldVelY > 5) { // Check if we just landed and were falling fast enough
+                    if (!player.wasOnGround && oldVelY > 5) { 
                         for(let i = 0; i < 20; i++) {
                             createDustParticle(player.x + player.w / 2, ground, 0);
                         }
@@ -1114,20 +1186,19 @@
                     player.y = ground - player.h;
                     player.velY = 0;
                     player.jumpCount = 0;
-                    player.onGround = true; // Player is on the ground
+                    player.onGround = true; 
                 } else {
-                    player.onGround = false; // Player is in the air
+                    player.onGround = false; 
                 }
                 
                 // --- DASHING & COMBAT ---
-
                 if (player.isDashing && npc.alive && !player.hasDashHit) {
                     let dashHitbox = { x: player.x, y: player.y, w: player.w, h: player.h };
                     let npcBox = getNPCBox();
 
                     if (rectCollide(dashHitbox, npcBox)) {
                         const dashPunchDamage = player.stats.strength * 2.5;
-                        dealDamageToNPC(dashPunchDamage, true, 12); // Heavy Knockback on Dash
+                        dealDamageToNPC(dashPunchDamage, true, 12); 
 
                         player.velX = 0;
                         player.isDashing = false; 
@@ -1135,7 +1206,7 @@
                         player.hasDashHit = true;
 
                         player.attackTime = 10;
-                        triggerScreenShake(15, 8); // HEAVY SHAKE
+                        triggerScreenShake(15, 8); 
                     }
                 }
                 
@@ -1211,17 +1282,11 @@
                     document.getElementById("npcHpBarInner").style.width = (npc.hp / npc.maxHp * 100) + "%";
                 }
 
-                // NEW: Low HP Red Tint (Flashing)
+                // Low HP Red Tint
                 let redTintOpacity = 0;
                 if (hpRatio < 0.3) {
-                    // 1. Base Opacity: increases from 0.0 to 0.08 as HP drops from 30% to 0%
                     let baseOpacity = (1 - (hpRatio / 0.3)) * 0.08; 
-                    
-                    // 2. Flashing Component (Sine wave based on time for smooth, steady flash)
-                    // 0.008 controls the speed of the flash
                     const flashComponent = (Math.sin(Date.now() * 0.008) + 1) / 2;
-                    
-                    // 3. Combine: Opacity oscillates around the base opacity. Max is 0.08 + 0.05 = 0.13
                     redTintOpacity = baseOpacity + (flashComponent * 0.05); 
                 }
                 document.getElementById('lowHpOverlay').style.backgroundColor = `rgba(255, 0, 0, ${redTintOpacity.toFixed(3)})`;
@@ -1268,32 +1333,28 @@
                 }
             }
 
-            // ===== DRAW LOOP (MODIFIED FOR PARALLAX AND FULL FLASH VFX) =====
+            // ===== DRAW LOOP (MODIFIED FOR MULTIPLAYER) =====
             function draw() {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 
                 let shakeOffsetX = 0;
                 let shakeOffsetY = 0;
                 if (screenShakeTime > 0) {
-                    // Random offset based on intensity
                     shakeOffsetX = (Math.random() - 0.5) * shakeIntensity * 2;
                     shakeOffsetY = (Math.random() - 0.5) * shakeIntensity * 2;
                 }
 
                 const GROUND_Y_GLOBAL = canvas.height - 80;
 
-                // --- 1. DRAW PARALLAX BACKGROUND (Affected by shake, manually offset by camX) ---
+                // --- 1. PARALLAX ---
                 ctx.save(); 
                 ctx.translate(shakeOffsetX, shakeOffsetY);
-                
-                // Farthest Layer (0.1) - Dark Sky/Deep Background
                 const FAR_BG_FACTOR = 0.1;
                 ctx.fillStyle = "#000033"; 
                 let farX = (-camX * FAR_BG_FACTOR) % canvas.width;
                 ctx.fillRect(farX - canvas.width, 0, canvas.width, GROUND_Y_GLOBAL);
                 ctx.fillRect(farX, 0, canvas.width, GROUND_Y_GLOBAL);
 
-                // Mid Layer (0.3) - Blocky Structures (repeats every 500 units)
                 const MID_BG_FACTOR = 0.3;
                 ctx.fillStyle = "#0a0a55";
                 let midX = (-camX * MID_BG_FACTOR) % 500; 
@@ -1301,25 +1362,16 @@
                     ctx.fillRect(midX + i * 500, GROUND_Y_GLOBAL - 80, 50, 80);
                     ctx.fillRect(midX + i * 500 + 100, GROUND_Y_GLOBAL - 150, 80, 150);
                 }
-                
-                // Close Layer (0.6) - Pillars/Trees (repeats every 400 units)
-                const CLOSE_BG_FACTOR = 0.6;
-                ctx.fillStyle = "#151577";
-                let closeX = (-camX * CLOSE_BG_FACTOR) % 400; 
-                for (let i = -5; i < canvas.width / 400 + 5; i++) {
-                    ctx.fillRect(closeX + i * 400, GROUND_Y_GLOBAL - 40, 30, 40);
-                }
-                
-                ctx.restore(); // End Parallax Draw
+                ctx.restore(); 
 
-                // --- 2. DRAW FOREGROUND (Affected by shake and full -camX translation) ---
+                // --- 2. FOREGROUND ---
                 ctx.save(); 
                 ctx.translate(shakeOffsetX, shakeOffsetY);
-                ctx.translate(-camX, 0); // Camera translation for foreground elements
+                ctx.translate(-camX, 0); 
 
-                // GROUND (Moves 1:1 with camera)
+                // GROUND
                 ctx.fillStyle = "#222";
-                ctx.fillRect(camX - 1000, GROUND_Y_GLOBAL, canvas.width + 2000, 80); // Draw a very long ground bar
+                ctx.fillRect(camX - 1000, GROUND_Y_GLOBAL, canvas.width + 2000, 80); 
                 
                 // AFTERIMAGES
                 for (let img of afterimages) {
@@ -1333,18 +1385,17 @@
                 if (npc.alive) {
                     const npcDrawY = npc.isAirborne ? npc.y : GROUND_Y_GLOBAL - npc.h;
                     
-                    // --- VFX: HIT FLASH DRAWING ---
                     if (npc.hitFlashTimer > 0) {
-                        ctx.fillStyle = "#ffffff"; // Pure white flash
+                        ctx.fillStyle = "#ffffff"; 
                         ctx.shadowBlur = 20;
                         ctx.shadowColor = "white";
                     } else {
-                        ctx.fillStyle = "#f33"; // Normal Color
+                        ctx.fillStyle = "#f33"; 
                         ctx.shadowBlur = 0;
                     }
 
                     ctx.fillRect(npc.x, npcDrawY, npc.w, npc.h);
-                    ctx.shadowBlur = 0; // Reset shadow
+                    ctx.shadowBlur = 0; 
                     
                     if(npc.isAirborne) {
                         ctx.strokeStyle = "#ffffff";
@@ -1356,6 +1407,23 @@
                         ctx.stroke();
                         ctx.globalAlpha = 1;
                     }
+                }
+
+                // DRAW OTHER PLAYER (Network)
+                if (otherPlayer.active) {
+                    ctx.fillStyle = "#ff00ff"; // Purple for opponent
+                    if(otherPlayer.isBlocking) ctx.fillStyle = "#888";
+                    
+                    ctx.globalAlpha = 0.7;
+                    ctx.fillRect(otherPlayer.x, otherPlayer.y, otherPlayer.w, otherPlayer.h);
+                    
+                    // Nametag
+                    ctx.fillStyle = "#fff";
+                    ctx.font = "10px Arial";
+                    ctx.textAlign = "center";
+                    ctx.fillText("Ally", otherPlayer.x + otherPlayer.w/2, otherPlayer.y - 10);
+                    
+                    ctx.globalAlpha = 1;
                 }
 
                 // PLAYER
@@ -1387,7 +1455,6 @@
                     ctx.globalAlpha = 1;
                 }
 
-
                 // ATTACK HITBOX
                 if (player.attackTime > 0) {
                     let hitbox = getAttackBox();
@@ -1401,7 +1468,7 @@
                     ctx.fillRect(p.x, p.y, p.size, p.size);
                 }
 
-                // COMPLEX VFX
+                // VFX
                 for (let vfx of vfxQueue) {
                     ctx.globalAlpha = vfx.life / (vfx.life > 20 ? 30 : 10);
                     if (vfx.type === 'shockwave') {
@@ -1427,10 +1494,10 @@
                          ctx.beginPath();
                          ctx.arc(vfx.x, vfx.y, size, 0, Math.PI * 2);
                          ctx.fill();
-                    } else if (vfx.type === 'impactRing') { // NEW RING EFFECT
+                    } else if (vfx.type === 'impactRing') { 
                          ctx.strokeStyle = vfx.color;
                          ctx.lineWidth = 3;
-                         const size = vfx.size + (50 * (1 - vfx.life / 10)); // Expands
+                         const size = vfx.size + (50 * (1 - vfx.life / 10));
                          ctx.beginPath();
                          ctx.arc(vfx.x, vfx.y, size, 0, Math.PI * 2);
                          ctx.stroke();
@@ -1452,20 +1519,102 @@
                 }
                 ctx.globalAlpha = 1;
 
-                ctx.restore(); // End Foreground Draw
+                ctx.restore(); 
                 
-                // --- 3. DRAW SCREEN VFX (No translation, no shake) ---
+                // --- 3. SCREEN VFX ---
                 for (let i = vfxQueue.length - 1; i >= 0; i--) {
                     const vfx = vfxQueue[i];
                     if (vfx.type === 'fullFlash') {
                         ctx.save();
-                        ctx.globalAlpha = vfx.life / 5; // Quick fade
+                        ctx.globalAlpha = vfx.life / 5; 
                         ctx.fillStyle = vfx.color;
                         ctx.fillRect(0, 0, canvas.width, canvas.height);
                         ctx.restore();
                     }
                 }
             }
+
+            // ===== PEERJS INIT =====
+            function initNetwork() {
+                const overlay = document.getElementById('connectionOverlay');
+                const status = document.getElementById('connStatus');
+                const idDisplay = document.getElementById('connId');
+
+                if (mode === 'quick') {
+                    // Placeholder for matchmaking - just creates a room
+                    isHost = true;
+                    status.innerText = "Creating Quick Match...";
+                    peer = new Peer(); // Random ID
+                } else if (mode === 'host' && roomId) {
+                    isHost = true;
+                    status.innerText = "Hosting Room...";
+                    peer = new Peer(roomId);
+                } else if (mode === 'join' && roomId) {
+                    isHost = false;
+                    status.innerText = "Connecting to Host...";
+                    peer = new Peer();
+                } else {
+                    // Fallback local play
+                    overlay.style.display = 'none';
+                    return;
+                }
+
+                peer.on('open', (id) => {
+                    idDisplay.innerText = "ID: " + id;
+                    if (isHost) {
+                        status.innerText = "Waiting for Player...";
+                        peer.on('connection', (c) => {
+                            conn = c;
+                            setupConnection();
+                        });
+                    } else {
+                        status.innerText = "Joining...";
+                        conn = peer.connect(roomId);
+                        setupConnection();
+                    }
+                });
+
+                peer.on('error', (err) => {
+                    status.innerText = "Error: " + err.type;
+                    setTimeout(() => { overlay.style.display = 'none'; }, 2000); // Fail to local
+                });
+            }
+
+            function setupConnection() {
+                const overlay = document.getElementById('connectionOverlay');
+                const status = document.getElementById('connStatus');
+                
+                conn.on('open', () => {
+                    status.innerText = "Connected!";
+                    gameStarted = true;
+                    otherPlayer.active = true;
+                    setTimeout(() => { overlay.style.display = 'none'; }, 500);
+                });
+
+                conn.on('data', (data) => {
+                    if (data.type === 'state') {
+                        otherPlayer.x = data.x;
+                        otherPlayer.y = data.y;
+                        otherPlayer.facing = data.facing;
+                        otherPlayer.isBlocking = data.isBlocking;
+                        // Interpolation could go here
+                    } else if (data.type === 'npcState' && !isHost) {
+                        // Client trusts Host for NPC
+                        npc.x = data.x;
+                        npc.y = data.y;
+                        npc.hp = data.hp;
+                        npc.isAirborne = data.isAirborne;
+                    } else if (data.type === 'attack' && isHost) {
+                        // Client hit NPC
+                        dealDamageToNPC(data.dmg, false, data.force);
+                    } else if (data.type === 'npcAttack') {
+                        dealDamageToPlayer(15);
+                    }
+                });
+            }
+
+            // Init Network on Load
+            initNetwork();
 
             function loop() {
                 update();
